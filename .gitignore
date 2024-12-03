@@ -1,0 +1,13 @@
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+.dev/
+.env
+
+/bin/
+vendor/
+
+.pytest_cache
+__pycache__
