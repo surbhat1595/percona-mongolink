@@ -110,3 +110,58 @@ class TestCRUDOperation(BaseTesting):
         self.compare_coll_options(db, coll)
         self.compare_coll_indexes(db, coll)
         self.compare_coll_content(db, coll)
+
+    def test_find_one_and_update(self, change_stream, mlink, db, coll):
+        with self.prepare() as it:
+            it.ensure_empty_collection(db, coll)
+            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+
+        with mlink, change_stream:
+            for i in range(5):
+                self.source[db][coll].find_one_and_update(
+                    {"i": i},
+                    {
+                        "$inc": {"i": (i * 100) - i},
+                        "$set": {f"field_{i}": f"value_{i}"},
+                    },
+                )
+            for i in range(5):
+                self.expect_update_event(change_stream.next(), db, coll)
+
+        self.compare_coll_options(db, coll)
+        self.compare_coll_indexes(db, coll)
+        self.compare_coll_content(db, coll)
+
+    def test_find_one_and_replace(self, change_stream, mlink, db, coll):
+        with self.prepare() as it:
+            it.ensure_empty_collection(db, coll)
+            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+
+        with mlink, change_stream:
+            for i in range(5):
+                self.source[db][coll].find_one_and_replace(
+                    {"i": i},
+                    {
+                        "i": (i * 100) - i,
+                        f"field_{i}": f"value_{i}",
+                    },
+                )
+            for i in range(5):
+                self.expect_replace_event(change_stream.next(), db, coll)
+
+        self.compare_coll_options(db, coll)
+        self.compare_coll_indexes(db, coll)
+        self.compare_coll_content(db, coll)
+
+    def test_find_one_and_delete(self, change_stream, mlink, db, coll):
+        with self.prepare() as it:
+            it.ensure_empty_collection(db, coll)
+            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+
+        with mlink, change_stream:
+            self.source[db][coll].find_one_and_delete({"i": 4})
+            self.expect_delete_event(change_stream.next(), db, coll)
+
+        self.compare_coll_options(db, coll)
+        self.compare_coll_indexes(db, coll)
+        self.compare_coll_content(db, coll)
