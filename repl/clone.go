@@ -2,6 +2,7 @@ package repl
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 
@@ -135,7 +136,7 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 }
 
 func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error {
-	log.Debug(ctx, "cloning %s.%s", spec.dbName, spec.spec.Name)
+	log.Debug(ctx, "cloning", "ns", spec.dbName+"."+spec.spec.Name)
 
 	err := c.prepareCollection(ctx, spec)
 	if err != nil {
@@ -159,10 +160,10 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 
 	err = cur.Err()
 	if err != nil {
-		return errors.Wrapf(err, "cloning failed %s.%s", spec.dbName, spec.spec.Name)
+		return errors.Wrapf(err, fmt.Sprintf("cloning failed %s.%s", spec.dbName+"."+spec.spec.Name))
 	}
 
-	log.Info(ctx, "cloned %s.%s", spec.dbName, spec.spec.Name)
+	log.Info(ctx, "cloned", "ns", spec.dbName+"."+spec.spec.Name)
 	return nil
 }
 
