@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -23,9 +25,17 @@ func main() {
 	ctx := context.Background()
 
 	srvOpts := serverOptions{}
+	flag.StringVar(&srvOpts.Port, "port", "2242", "port")
 	flag.StringVar(&srvOpts.SourceURI, "src", "", "MongoDB connection string")
 	flag.StringVar(&srvOpts.DestURI, "dest", "", "MongoDB connection string")
 	flag.Parse()
+
+	addr, err := buildServerAddr(srvOpts.Port)
+	if err != nil {
+
+		log.Error(ctx, "build server address", log.Err(err))
+		os.Exit(1)
+	}
 
 	srv, err := newServer(ctx, srvOpts)
 	if err != nil {
@@ -34,14 +44,14 @@ func main() {
 	}
 
 	httpServer := http.Server{
-		Addr:    "localhost:8080",
+		Addr:    addr,
 		Handler: srv.Handler(),
 
 		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 
-	log.Info(ctx, "starting server at localhost:8080")
+	log.Info(ctx, fmt.Sprintf("starting server at %s", addr))
 	err = httpServer.ListenAndServe()
 	if err != nil {
 		log.Error(ctx, "server", log.Err(err))
@@ -54,8 +64,24 @@ func main() {
 }
 
 type serverOptions struct {
+	Port      string
 	SourceURI string
 	DestURI   string
+}
+
+var errUnsupportedPortRange = errors.New("port value is outside supported range [1024 - 65535]")
+
+func buildServerAddr(port string) (string, error) {
+	i, err := strconv.ParseInt(port, 10, 32)
+	if err != nil {
+		return "", errors.Wrap(err, "invalid port value format")
+	}
+
+	if i < 1024 || i > 65535 {
+		return "", errUnsupportedPortRange
+	}
+
+	return "localhost:" + port, nil
 }
 
 type server struct {
