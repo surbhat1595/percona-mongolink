@@ -26,6 +26,19 @@ class TestCollection(BaseTesting):
         self.compare_coll_options(db, coll)
         self.compare_coll_indexes(db, coll)
 
+    @pytest.mark.xfail
+    def test_create_with_unique_index(self, change_stream, mlink, db, coll):
+        with self.prepare() as it:
+            it.ensure_no_collection(db, coll)
+
+        with mlink, change_stream:
+            self.source[db].create_collection(coll)
+            self.source[db][coll].create_index({"i": 1, "unique": 1})
+            self.expect_create_event(change_stream.next(), db, coll)
+
+        self.compare_coll_options(db, coll)
+        self.compare_coll_indexes(db, coll)
+
     def test_create_equal_uuid(self, change_stream, mlink, db, coll):
         with self.prepare() as it:
             it.ensure_no_collection(db, coll)
