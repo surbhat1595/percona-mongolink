@@ -4,7 +4,7 @@ go 1.23
 
 require (
 	go.mongodb.org/mongo-driver v1.17.1
-	golang.org/x/sync v0.9.0
+	golang.org/x/sync v0.10.0
 )
 
 require (
