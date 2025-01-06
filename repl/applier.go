@@ -125,15 +125,21 @@ func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "create view")
 	}
 
-	opts := options.CreateCollection()
+	var opts bson.D
 	for _, e := range event.OperationDescription {
 		switch e.Key {
+		case "idIndex":
+			idIndex, ok := e.Value.(bson.D)
+			if !ok {
+				return errors.Wrap(err, "missed clusteredIndex field")
+			}
+			opts = append(opts, bson.E{"idIndex", idIndex})
 		case "clusteredIndex":
 			clusteredIndex, ok := e.Value.(bson.D)
 			if !ok {
 				return errors.Wrap(err, "missed clusteredIndex field")
 			}
-			opts.SetClusteredIndex(clusteredIndex)
+			opts = append(opts, bson.E{"clusteredIndex", clusteredIndex})
 		default:
 			log.Debug(ctx, "HandleCreate: unknown field",
 				"key", e.Key,
@@ -143,9 +149,9 @@ func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 		}
 	}
 
-	err = h.Client.Database(event.Namespace.Database).
-		CreateCollection(ctx, event.Namespace.Collection, opts)
-	return errors.Wrap(err, "create collection")
+	cmd := append(bson.D{{"create", event.Namespace.Collection}}, opts...)
+	res := h.Client.Database(event.Namespace.Database).RunCommand(ctx, cmd)
+	return errors.Wrap(res.Err(), "create collection")
 }
 
 func (h *EventApplier) handleDrop(ctx context.Context, data bson.Raw) error {
