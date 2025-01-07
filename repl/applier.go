@@ -2,15 +2,12 @@ package repl
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
 )
 
 var ErrInvalidOpTypeField = errors.New("invalid operationType field")
@@ -77,14 +74,6 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) error {
 	return errors.Wrap(err, opType)
 }
 
-type TimeseriesError struct {
-	NS Namespace
-}
-
-func (e TimeseriesError) Error() string {
-	return "unsupported timeseries: " + e.NS.Database + "." + e.NS.Collection
-}
-
 func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateEvent](data)
 	if err != nil {
@@ -92,66 +81,20 @@ func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 	}
 
 	if event.CollectionUUID == nil {
-		var viewOn string
-		var pipeline mongo.Pipeline
-		for _, e := range event.OperationDescription {
-			var ok bool
-			switch e.Key {
-			case "viewOn":
-				viewOn, ok = e.Value.(string)
-				if !ok {
-					return errors.Wrap(err, "missed viewOn field")
-				}
-			case "pipeline":
-				pipeline, ok = e.Value.([]bson.D)
-				if !ok {
-					return errors.Wrap(err, "missed pipeline field")
-				}
-			default:
-				log.Debug(ctx, "HandleCreate: unknown field",
-					"op", event.OperationType,
-					"ct", fmt.Sprintf("%d.%d", event.ClusterTime.T, event.ClusterTime.I),
-					"ns", event.Namespace.Database+"."+event.Namespace.Collection,
-					"key", e.Key)
-			}
-		}
-
-		if strings.HasPrefix(viewOn, "system.buckets.") {
-			return TimeseriesError{NS: event.Namespace}
-		}
-
-		err = h.Client.Database(event.Namespace.Database).
-			CreateView(ctx, event.Namespace.Collection, viewOn, pipeline)
-		return errors.Wrap(err, "create view")
+		return createView(ctx,
+			h.Client,
+			event.Namespace.Database,
+			event.Namespace.Collection,
+			event.OperationDescription,
+		)
 	}
 
-	var opts bson.D
-	for _, e := range event.OperationDescription {
-		switch e.Key {
-		case "idIndex":
-			idIndex, ok := e.Value.(bson.D)
-			if !ok {
-				return errors.Wrap(err, "missed clusteredIndex field")
-			}
-			opts = append(opts, bson.E{"idIndex", idIndex})
-		case "clusteredIndex":
-			clusteredIndex, ok := e.Value.(bson.D)
-			if !ok {
-				return errors.Wrap(err, "missed clusteredIndex field")
-			}
-			opts = append(opts, bson.E{"clusteredIndex", clusteredIndex})
-		default:
-			log.Debug(ctx, "HandleCreate: unknown field",
-				"key", e.Key,
-				"op", event.OperationType,
-				"ns", event.Namespace.Database+"."+event.Namespace.Collection,
-				"optime", fmt.Sprintf("%d.%d", event.ClusterTime.T, event.ClusterTime.I))
-		}
-	}
-
-	cmd := append(bson.D{{"create", event.Namespace.Collection}}, opts...)
-	res := h.Client.Database(event.Namespace.Database).RunCommand(ctx, cmd)
-	return errors.Wrap(res.Err(), "create collection")
+	return createCollection(ctx,
+		h.Client,
+		event.Namespace.Database,
+		event.Namespace.Collection,
+		event.OperationDescription,
+	)
 }
 
 func (h *EventApplier) handleDrop(ctx context.Context, data bson.Raw) error {

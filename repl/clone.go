@@ -2,8 +2,8 @@ package repl
 
 import (
 	"context"
-	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -20,6 +20,10 @@ type collSpec struct {
 	dbName  string
 	spec    *mongo.CollectionSpecification
 	indexes []*mongo.IndexSpecification
+}
+
+func (s *collSpec) ns() string {
+	return s.dbName + "." + s.spec.Name
 }
 
 type dataCloner struct {
@@ -72,23 +76,33 @@ func (c *dataCloner) init(ctx context.Context) error {
 			}
 
 			mu.Lock()
-			nsCatalog[db.Name] = make([]*collSpec, len(colls))
+			nsCatalog[db.Name] = make([]*collSpec, 0, len(colls))
 			mu.Unlock()
 
-			for i, coll := range colls {
+			for _, coll := range colls {
+				if strings.HasPrefix(coll.Name, "system.") {
+					continue
+				}
+
 				grp.Go(func() error {
-					indexes, err := c.Source.Database(db.Name).Collection(coll.Name).
-						Indexes().ListSpecifications(grpCtx)
-					if err != nil {
-						return errors.Wrap(err, "list indexes")
+					var indexes []*mongo.IndexSpecification
+
+					if coll.Type == "collection" {
+						var err error
+						indexes, err = c.Source.Database(db.Name).
+							Collection(coll.Name).
+							Indexes().ListSpecifications(grpCtx)
+						if err != nil {
+							return errors.Wrap(err, "list indexes")
+						}
 					}
 
 					mu.Lock()
-					nsCatalog[db.Name][i] = &collSpec{
+					nsCatalog[db.Name] = append(nsCatalog[db.Name], &collSpec{
 						dbName:  db.Name,
 						spec:    coll,
 						indexes: indexes,
-					}
+					})
 					mu.Unlock()
 					return nil
 				})
@@ -122,9 +136,17 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
 			errGrp.Go(func() error {
-				err := c.cloneCollection(grpCtx, spec)
+				var err error
+				switch spec.spec.Type {
+				case "collection":
+					err = c.cloneCollection(grpCtx, spec)
+				case "view":
+					err = c.cloneView(ctx, spec)
+				case "timeseries":
+					log.Info(ctx, "timeseries is not supported. skip", "ns", spec.ns())
+				}
 				if err != nil {
-					return errors.Wrapf(err, "clone %s.%s", spec.dbName, spec.spec.Name)
+					return errors.Wrap(err, "clone "+spec.ns())
 				}
 
 				return nil
@@ -136,11 +158,24 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 }
 
 func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error {
-	log.Debug(ctx, "cloning", "ns", spec.dbName+"."+spec.spec.Name)
+	log.Debug(ctx, "cloning collection", "ns", spec.ns())
 
-	err := c.prepareCollection(ctx, spec)
+	if c.Drop {
+		err := c.Destination.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
+		if err != nil {
+			return errors.Wrap(err, "drop")
+		}
+	}
+
+	var options bson.D
+	err := bson.Unmarshal(spec.spec.Options, &options)
 	if err != nil {
-		return errors.Wrap(err, "prepare")
+		return errors.Wrap(err, "unmarshal options")
+	}
+
+	err = createCollection(ctx, c.Destination, spec.dbName, spec.spec.Name, options)
+	if err != nil {
+		return errors.Wrap(err, "create collection")
 	}
 
 	cur, err := c.Source.Database(spec.dbName).Collection(spec.spec.Name).
@@ -160,14 +195,16 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 
 	err = cur.Err()
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("cloning failed %s.%s", spec.dbName+"."+spec.spec.Name))
+		return errors.Wrap(err, "cloning failed "+spec.ns())
 	}
 
-	log.Info(ctx, "cloned", "ns", spec.dbName+"."+spec.spec.Name)
+	log.Info(ctx, "cloned collection", "ns", spec.ns())
 	return nil
 }
 
-func (c *dataCloner) prepareCollection(ctx context.Context, spec *collSpec) error {
+func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
+	log.Debug(ctx, "cloning view", "ns", spec.ns())
+
 	if c.Drop {
 		err := c.Destination.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
 		if err != nil {
@@ -175,10 +212,17 @@ func (c *dataCloner) prepareCollection(ctx context.Context, spec *collSpec) erro
 		}
 	}
 
-	err := c.Destination.Database(spec.dbName).CreateCollection(ctx, spec.spec.Name)
+	var options bson.D
+	err := bson.Unmarshal(spec.spec.Options, &options)
 	if err != nil {
-		return errors.Wrap(err, "create")
+		return errors.Wrap(err, "unmarshal options")
 	}
 
+	err = createView(ctx, c.Destination, spec.dbName, spec.spec.Name, options)
+	if err != nil {
+		return errors.Wrap(err, "create view")
+	}
+
+	log.Info(ctx, "cloned view", "ns", spec.ns())
 	return nil
 }
