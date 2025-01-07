@@ -84,9 +84,31 @@ class TestCollection(BaseTesting):
         self.compare_coll_options(db, coll)
         self.compare_coll_indexes(db, coll)
 
+    def test_create_view(self, change_stream, mlink, db, coll):
+        view_name = f"{coll}_view"
+        with self.prepare() as it:
+            it.ensure_empty_collection(db, coll)
+            it.insert_documents(db, coll, [{"i": i for i in range(10)}])
+            it.ensure_no_collection(db, view_name)
+
+        with mlink, change_stream:
+            self.source[db].create_collection(
+                view_name,
+                viewOn=coll,
+                pipeline=[{"$match": {"i": {"$gt": 3}}}],
+            )
+            self.expect_create_event(change_stream.next(), db, view_name)
+
+        if view_name not in self.target[db].list_collection_names():
+            pytest.fail(f"'{db}.{coll}' must be present")
+
+        self.compare_coll_options(db, view_name)
+        # self.compare_coll_indexes(db, view_name)
+        self.compare_coll_content(db, view_name)
+
     def test_drop_collection(self, change_stream, mlink, db, coll):
         with self.prepare() as it:
-            it.drop_all_collections(db)
+            it.drop_database(db)
             it.ensure_empty_collection(db, coll)
 
         with mlink, change_stream:
@@ -98,9 +120,24 @@ class TestCollection(BaseTesting):
         if db in self.target.list_database_names():
             pytest.fail(f"'{db}' database must be dropped")
 
+    def test_drop_view(self, change_stream, mlink, db, coll):
+        view_name = f"{coll}_view"
+        with self.prepare() as it:
+            it.ensure_empty_collection(db, coll)
+            it.ensure_view(db, view_name, coll, [{"$match": {"i": {"$gt": 3}}}])
+
+        with mlink, change_stream:
+            self.source[db].drop_collection(view_name)
+            self.expect_drop_event(change_stream.next(), db, view_name)
+
+        if view_name in self.target[db].list_collection_names():
+            pytest.fail(f"'{db}.{coll}' must be dropped")
+        if coll not in self.target[db].list_collection_names():
+            pytest.fail(f"'{db}.{coll}' must not be dropped")
+
     def test_drop_database(self, change_stream, mlink, db, coll):
         with self.prepare() as it:
-            it.drop_all_collections(db)
+            it.drop_database(db)
             it.ensure_empty_collection(db, coll)
 
         with mlink, change_stream:
@@ -108,7 +145,5 @@ class TestCollection(BaseTesting):
             self.expect_drop_event(change_stream.next(), db, coll)
             self.expect_drop_database_event(change_stream.next(), db)
 
-        if coll in self.target[db].list_collection_names():
-            pytest.fail(f"'{db}.{coll}' must be dropped")
         if db in self.target.list_database_names():
             pytest.fail(f"'{db}' database must be dropped")

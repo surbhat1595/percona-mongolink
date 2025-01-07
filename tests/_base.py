@@ -192,8 +192,12 @@ class Prepare:
     def ensure_empty_collection(self, db_name, coll_name, **kwargs):
         # todo: ensure the same collection options
         self.ensure_no_collection(db_name, coll_name)
-        self.source[db_name].create_collection(coll_name)
-        self.target[db_name].create_collection(coll_name)
+        self.source[db_name].create_collection(coll_name, **kwargs)
+        self.target[db_name].create_collection(coll_name, **kwargs)
+
+    def ensure_view(self, db_name, view_name, source, pipeline):
+        # todo: ensure the same view options
+        self.ensure_empty_collection(db_name, view_name, viewOn=source, pipeline=pipeline)
 
     def insert_documents(self, db_name, coll_name, documents):
         self.source[db_name][coll_name].insert_many(documents)
@@ -201,7 +205,15 @@ class Prepare:
 
     def drop_all_collections(self, db_name):
         for coll_name in self.source[db_name].list_collection_names():
-            self.ensure_no_collection(db_name, coll_name)
+            if not coll_name.startswith("system."):
+                self.ensure_no_collection(db_name, coll_name)
+        for coll_name in self.target[db_name].list_collection_names():
+            if not coll_name.startswith("system."):
+                self.ensure_no_collection(db_name, coll_name)
+
+    def drop_database(self, db_name):
+        self.source.drop_database(db_name)
+        self.target.drop_database(db_name)
 
 
 class ChangeStream:
