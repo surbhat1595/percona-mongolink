@@ -4,146 +4,132 @@ from _base import BaseTesting
 
 
 class TestCollection(BaseTesting):
-    def test_create_implicitly(self, change_stream, mlink, db, coll):
+    def test_create_implicitly(self):
         with self.prepare() as it:
-            it.ensure_no_collection(db, coll)
+            it.ensure_no_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db][coll].insert_one({})
-            self.expect_create_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test.coll_name.insert_one({})
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
 
-    def test_create(self, change_stream, mlink, db, coll):
+    def test_create(self):
         with self.prepare() as it:
-            it.ensure_no_collection(db, coll)
+            it.ensure_no_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db].create_collection(coll)
-            self.expect_create_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test.create_collection("coll_name")
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
 
-    @pytest.mark.xfail
-    def test_create_with_unique_index(self, change_stream, mlink, db, coll):
+    @pytest.mark.xfail(reason="unsupported")
+    def test_create_with_unique_index(self):
         with self.prepare() as it:
-            it.ensure_no_collection(db, coll)
+            it.ensure_no_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db].create_collection(coll)
-            self.source[db][coll].create_index({"i": 1, "unique": 1})
-            self.expect_create_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test.create_collection("coll_name")
+            self.source.test.coll_name.create_index({"i": 1, "unique": 1})
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
 
-    def test_create_equal_uuid(self, change_stream, mlink, db, coll):
+    def test_create_equal_uuid(self):
         with self.prepare() as it:
-            it.ensure_no_collection(db, coll)
+            it.ensure_no_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db].create_collection(coll)
-            self.expect_create_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test.create_collection("coll_name")
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
 
-        source_info = next(self.source[db].list_collections(filter={"name": coll}))
-        target_info = next(self.target[db].list_collections(filter={"name": coll}))
+        source_info = next(self.source.test.list_collections(filter={"name": "coll_name"}))
+        target_info = next(self.target.test.list_collections(filter={"name": "coll_name"}))
         if source_info["info"]["uuid"] != target_info["info"]["uuid"]:
             pytest.xfail("collection UUID may not be equal")
 
-    def test_create_with_clustered_index(self, change_stream, mlink, db, coll):
+    def test_create_with_clustered_index(self):
         with self.prepare() as it:
-            it.ensure_no_collection(db, coll)
+            it.ensure_no_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db].create_collection(
-                coll,
+        with self.perform():
+            self.source.test.create_collection(
+                "coll_name",
                 clusteredIndex={
                     "key": {"_id": 1},
                     "unique": True,
                 },
             )
-            self.expect_create_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
 
     @pytest.mark.skip("capped collection is not unsupported yet")
-    def test_create_capped(self, change_stream, mlink, db, coll):
+    def test_create_capped(self):
         with self.prepare() as it:
-            it.ensure_no_collection(db, coll)
+            it.ensure_no_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db].create_collection(coll, capped=True, size=54321, max=12345)
-            self.expect_create_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test.create_collection("coll_name", capped=True, size=54321, max=12345)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
 
-    def test_create_view(self, change_stream, mlink, db, coll):
-        view_name = f"{coll}_view"
+    def test_create_view(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i for i in range(10)}])
-            it.ensure_no_collection(db, view_name)
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i for i in range(10)}])
+            it.ensure_no_collection("view_name")
 
-        with mlink, change_stream:
-            self.source[db].create_collection(
-                view_name,
-                viewOn=coll,
+        with self.perform():
+            self.source.test.create_collection(
+                "view_name",
+                viewOn="coll_name",
                 pipeline=[{"$match": {"i": {"$gt": 3}}}],
             )
-            self.expect_create_event(change_stream.next(), db, view_name)
 
-        if view_name not in self.target[db].list_collection_names():
-            pytest.fail(f"'{db}.{coll}' must be present")
+        if "view_name" not in self.target.test.list_collection_names():
+            pytest.fail("'test.view_name' must be present")
 
-        self.compare_coll_options(db, view_name)
-        # self.compare_coll_indexes(db, view_name)
-        self.compare_coll_content(db, view_name)
+        self.compare_coll_options("view_name")
+        self.compare_coll_content("view_name")
 
-    def test_drop_collection(self, change_stream, mlink, db, coll):
+    def test_drop_collection(self):
         with self.prepare() as it:
-            it.drop_database(db)
-            it.ensure_empty_collection(db, coll)
+            it.drop_database()
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source[db].drop_collection(coll)
-            self.expect_drop_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test.drop_collection("coll_name")
 
-        if coll in self.target[db].list_collection_names():
-            pytest.fail(f"'{db}.{coll}' must be dropped")
-        if db in self.target.list_database_names():
-            pytest.fail(f"'{db}' database must be dropped")
+        if "coll_name" in self.target.test.list_collection_names():
+            pytest.fail("'test.coll_name' must be dropped")
+        if "test" in self.target.list_database_names():
+            pytest.fail("'test' database must be dropped")
 
-    def test_drop_view(self, change_stream, mlink, db, coll):
-        view_name = f"{coll}_view"
+    def test_drop_view(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.ensure_view(db, view_name, coll, [{"$match": {"i": {"$gt": 3}}}])
+            it.ensure_empty_collection("coll_name")
+            it.ensure_view("view_name", "coll_name", [{"$match": {"i": {"$gt": 3}}}])
 
-        with mlink, change_stream:
-            self.source[db].drop_collection(view_name)
-            self.expect_drop_event(change_stream.next(), db, view_name)
+        with self.perform():
+            self.source.test.drop_collection("view_name")
 
-        if view_name in self.target[db].list_collection_names():
-            pytest.fail(f"'{db}.{coll}' must be dropped")
-        if coll not in self.target[db].list_collection_names():
-            pytest.fail(f"'{db}.{coll}' must not be dropped")
+        if "view_name" in self.target.test.list_collection_names():
+            pytest.fail("'test.view_name' must be dropped")
+        if "coll_name" not in self.target.test.list_collection_names():
+            pytest.fail("'test.coll_name' must not be dropped")
 
-    def test_drop_database(self, change_stream, mlink, db, coll):
+    def test_drop_database(self):
         with self.prepare() as it:
-            it.drop_database(db)
-            it.ensure_empty_collection(db, coll)
+            it.drop_database()
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
-            self.source.drop_database(db)
-            self.expect_drop_event(change_stream.next(), db, coll)
-            self.expect_drop_database_event(change_stream.next(), db)
+        with self.perform():
+            self.source.drop_database("test")
 
-        if db in self.target.list_database_names():
-            pytest.fail(f"'{db}' database must be dropped")
+        if "test" in self.target.list_database_names():
+            pytest.fail("'test' database must be dropped")

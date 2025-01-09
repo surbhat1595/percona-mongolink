@@ -1,4 +1,0 @@
-endpoint:
-- /start
-- /finalize
-- /status

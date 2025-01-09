@@ -189,6 +189,11 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Ok:    true,
 		State: replStatus.State,
 	}
+	if !replStatus.LastAppliedOpTime.IsZero() {
+		res.LastAppliedOpTime = fmt.Sprintf("%d.%d",
+			replStatus.LastAppliedOpTime.T,
+			replStatus.LastAppliedOpTime.I)
+	}
 	err = json.NewEncoder(w).Encode(res)
 	if err != nil {
 		log.Error(ctx, "write status", log.Err(err))
@@ -210,7 +215,8 @@ type statusResponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 
-	State repl.State `json:"state"`
+	State             repl.State `json:"state"`
+	LastAppliedOpTime string     `json:"lastAppliedOpTime,omitempty"`
 }
 
 func internalServerError(w http.ResponseWriter) {

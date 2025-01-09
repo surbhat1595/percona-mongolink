@@ -3,65 +3,55 @@ from _base import BaseTesting
 
 
 class TestCRUDOperation(BaseTesting):
-    def test_insert_one(self, change_stream, mlink, db, coll):
+    def test_insert_one(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
-            inserted_ids = []
+        with self.perform():
             for i in range(5):
-                res = self.source[db][coll].insert_one({"i": i})
-                inserted_ids.append(res.inserted_id)
+                self.source.test["coll_name"].insert_one({"i": i})
 
-            for i in range(5):
-                self.expect_insert_event(change_stream.next(), db, coll, inserted_ids[i])
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
-
-    def test_insert_many(self, change_stream, mlink, db, coll):
+    def test_insert_many(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
-            res = self.source[db][coll].insert_many([{"i": i} for i in range(5)])
+        with self.perform():
+            self.source.test["coll_name"].insert_many([{"i": i} for i in range(5)])
 
-            for i in range(5):
-                self.expect_insert_event(change_stream.next(), db, coll, res.inserted_ids[i])
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
-
-    def test_update_one(self, change_stream, mlink, db, coll):
+    def test_update_one(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].update_one(
+                self.source.test["coll_name"].update_one(
                     {"i": i},
                     {
                         "$inc": {"i": (i * 100) - i},
                         "$set": {f"field_{i}": f"value_{i}"},
                     },
                 )
-            for i in range(5):
-                self.expect_update_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_update_one_upsert(self, change_stream, mlink, db, coll):
+    def test_update_one_upsert(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].update_one(
+                self.source.test["coll_name"].update_one(
                     {"i": i},
                     {
                         "$inc": {"i": (i * 100) - i},
@@ -69,55 +59,49 @@ class TestCRUDOperation(BaseTesting):
                     },
                     upsert=True,
                 )
-            for i in range(5):
-                self.expect_insert_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_update_many(self, change_stream, mlink, db, coll):
+    def test_update_many(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
-            self.source[db][coll].update_many({}, {"$inc": {"i": 100}})
-            for _ in range(5):
-                self.expect_update_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test["coll_name"].update_many({}, {"$inc": {"i": 100}})
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_replace_one(self, change_stream, mlink, db, coll):
+    def test_replace_one(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].replace_one(
+                self.source.test["coll_name"].replace_one(
                     {"i": i},
                     {
                         "i": (i * 100) - i,
                         f"field_{i}": f"value_{i}",
                     },
                 )
-            for i in range(5):
-                self.expect_replace_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_replace_one_upsert(self, change_stream, mlink, db, coll):
+    def test_replace_one_upsert(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].replace_one(
+                self.source.test["coll_name"].replace_one(
                     {"i": i},
                     {
                         "i": (i * 100) - i,
@@ -125,68 +109,61 @@ class TestCRUDOperation(BaseTesting):
                     },
                     upsert=True,
                 )
-            for i in range(5):
-                self.expect_insert_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_delete_one(self, change_stream, mlink, db, coll):
+    def test_delete_one(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
-            self.source[db][coll].delete_one({"i": 4})
-            self.expect_delete_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test["coll_name"].delete_one({"i": 4})
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_delete_many(self, change_stream, mlink, db, coll):
+    def test_delete_many(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
-            self.source[db][coll].delete_many({})
-            for i in range(5):
-                self.expect_delete_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test["coll_name"].delete_many({})
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_find_one_and_update(self, change_stream, mlink, db, coll):
+    def test_find_one_and_update(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].find_one_and_update(
+                self.source.test["coll_name"].find_one_and_update(
                     {"i": i},
                     {
                         "$inc": {"i": (i * 100) - i},
                         "$set": {f"field_{i}": f"value_{i}"},
                     },
                 )
-            for i in range(5):
-                self.expect_update_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_find_one_and_update_upsert(self, change_stream, mlink, db, coll):
+    def test_find_one_and_update_upsert(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].find_one_and_update(
+                self.source.test["coll_name"].find_one_and_update(
                     {"i": i},
                     {
                         "$inc": {"i": (i * 100) - i},
@@ -194,41 +171,37 @@ class TestCRUDOperation(BaseTesting):
                     },
                     upsert=True,
                 )
-            for i in range(5):
-                self.expect_insert_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_find_one_and_replace(self, change_stream, mlink, db, coll):
+    def test_find_one_and_replace(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].find_one_and_replace(
+                self.source.test["coll_name"].find_one_and_replace(
                     {"i": i},
                     {
                         "i": (i * 100) - i,
                         f"field_{i}": f"value_{i}",
                     },
                 )
-            for i in range(5):
-                self.expect_replace_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_find_one_and_replace_upsert(self, change_stream, mlink, db, coll):
+    def test_find_one_and_replace_upsert(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
+            it.ensure_empty_collection("coll_name")
 
-        with mlink, change_stream:
+        with self.perform():
             for i in range(5):
-                self.source[db][coll].find_one_and_replace(
+                self.source.test["coll_name"].find_one_and_replace(
                     {"i": i},
                     {
                         "i": (i * 100) - i,
@@ -236,22 +209,19 @@ class TestCRUDOperation(BaseTesting):
                     },
                     upsert=True,
                 )
-            for i in range(5):
-                self.expect_insert_event(change_stream.next(), db, coll)
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")
 
-    def test_find_one_and_delete(self, change_stream, mlink, db, coll):
+    def test_find_one_and_delete(self):
         with self.prepare() as it:
-            it.ensure_empty_collection(db, coll)
-            it.insert_documents(db, coll, [{"i": i} for i in range(5)])
+            it.ensure_empty_collection("coll_name")
+            it.insert_documents("coll_name", [{"i": i} for i in range(5)])
 
-        with mlink, change_stream:
-            self.source[db][coll].find_one_and_delete({"i": 4})
-            self.expect_delete_event(change_stream.next(), db, coll)
+        with self.perform():
+            self.source.test["coll_name"].find_one_and_delete({"i": 4})
 
-        self.compare_coll_options(db, coll)
-        self.compare_coll_indexes(db, coll)
-        self.compare_coll_content(db, coll)
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+        self.compare_coll_content("coll_name")

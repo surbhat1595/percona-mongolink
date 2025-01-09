@@ -4,13 +4,17 @@ import (
 	"context"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 )
 
-var ErrInvalidOpTypeField = errors.New("invalid operationType field")
+var (
+	ErrInvalidOpTypeField = errors.New("invalid operationType field")
+	ErrClusterTimeField   = errors.New("invalid clusterTime field")
+)
 
 type UnsupportedEventError struct {
 	OpType string
@@ -20,8 +24,8 @@ func (e UnsupportedEventError) Error() string {
 	return "unsupported type: " + e.OpType
 }
 
-type EventApplier struct {
-	Client *mongo.Client
+func IsUnsupportedEventError(err error) bool {
+	return errors.As(err, &UnsupportedEventError{})
 }
 
 type InvalidatedError struct {
@@ -36,11 +40,20 @@ func IsInvalidatedError(err error) bool {
 	return errors.As(err, &InvalidatedError{})
 }
 
-func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) error {
+type EventApplier struct {
+	Client *mongo.Client
+}
+
+func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Timestamp, error) {
 	opType, ok := data.Lookup("operationType").StringValueOK()
 	if !ok {
-		return ErrInvalidOpTypeField
+		return primitive.Timestamp{}, ErrInvalidOpTypeField
 	}
+	t, i, ok := data.Lookup("clusterTime").TimestampOK()
+	if !ok {
+		return primitive.Timestamp{}, ErrClusterTimeField
+	}
+	clusterTime := primitive.Timestamp{T: t, I: i}
 
 	var err error
 	switch opType {
@@ -62,16 +75,16 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) error {
 	case string(Invalidate):
 		event, err := parseEvent[InvalidateEvent](data)
 		if err != nil {
-			return errors.Wrap(err, "invalidate: parse")
+			return clusterTime, errors.Wrap(err, "invalidate: parse")
 		}
 
-		return &InvalidatedError{event.ID}
+		return clusterTime, &InvalidatedError{event.ID}
 
 	default:
-		return &UnsupportedEventError{OpType: opType}
+		return clusterTime, &UnsupportedEventError{OpType: opType}
 	}
 
-	return errors.Wrap(err, opType)
+	return clusterTime, errors.Wrap(err, opType)
 }
 
 func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {

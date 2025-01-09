@@ -2,18 +2,7 @@
 import os
 
 import pytest
-from _base import ChangeStream, MongoLink
 from pymongo import MongoClient
-
-
-@pytest.fixture
-def db():
-    return "test"
-
-
-@pytest.fixture
-def coll():
-    return "coll_name"
 
 
 @pytest.fixture(scope="session")
@@ -28,16 +17,6 @@ def target_conn():
     conn = MongoClient(os.environ["TEST_TARGET_URI"])
     yield conn
     conn.close()
-
-
-@pytest.fixture(scope="session")
-def mlink():
-    return MongoLink(os.environ["TEST_MLINK_URI"])
-
-
-@pytest.fixture
-def change_stream(target_conn):
-    return ChangeStream(target_conn)
 
 
 @pytest.fixture(scope="class")

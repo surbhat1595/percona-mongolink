@@ -1,6 +1,8 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import hashlib
+import os
 import time
+from enum import StrEnum
 
 import bson
 import pytest
@@ -17,99 +19,27 @@ class BaseTesting:
     def prepare(self):
         return Prepare(self)
 
-    @classmethod
-    def expect_create_event(cls, event: dict, db_name, coll_name):
-        if event["operationType"] != "create":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'create'")
-        if event["ns"]["db"] != db_name or event["ns"]["coll"] != coll_name:
-            pytest.fail(
-                f"ns='{event['ns']['db']}.{event['ns']['coll']}', "
-                + f"expected '{db_name}.{coll_name}'"
-            )
+    def perform(self):
+        return Perform(self)
 
     @classmethod
-    def expect_insert_event(cls, event: dict, db_name, coll_name, oid=None):
-        if event["operationType"] != "insert":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'create'")
-        if event["ns"]["db"] != db_name or event["ns"]["coll"] != coll_name:
-            pytest.fail(
-                f"ns='{event['ns']['db']}.{event['ns']['coll']}', "
-                + f"expected '{db_name}.{coll_name}'"
-            )
-        if oid and event["documentKey"]["_id"] != oid:
-            pytest.fail(f"{event['documentKey']}, expected {oid}")
-
-    @classmethod
-    def expect_update_event(cls, event: dict, db_name, coll_name, oid=None):
-        if event["operationType"] != "update":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'create'")
-        if event["ns"]["db"] != db_name or event["ns"]["coll"] != coll_name:
-            pytest.fail(
-                f"ns='{event['ns']['db']}.{event['ns']['coll']}', "
-                + f"expected '{db_name}.{coll_name}'"
-            )
-        if oid and event["documentKey"]["_id"] != oid:
-            pytest.fail(f"{event['documentKey']}, expected {oid}")
-
-    @classmethod
-    def expect_replace_event(cls, event: dict, db_name, coll_name, oid=None):
-        if event["operationType"] != "replace":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'create'")
-        if event["ns"]["db"] != db_name or event["ns"]["coll"] != coll_name:
-            pytest.fail(
-                f"ns='{event['ns']['db']}.{event['ns']['coll']}', "
-                + f"expected '{db_name}.{coll_name}'"
-            )
-        if oid and event["documentKey"]["_id"] != oid:
-            pytest.fail(f"{event['documentKey']}, expected {oid}")
-
-    @classmethod
-    def expect_delete_event(cls, event: dict, db_name, coll_name, oid=None):
-        if event["operationType"] != "delete":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'create'")
-        if event["ns"]["db"] != db_name or event["ns"]["coll"] != coll_name:
-            pytest.fail(
-                f"ns='{event['ns']['db']}.{event['ns']['coll']}', "
-                + f"expected '{db_name}.{coll_name}'"
-            )
-        if oid and event["documentKey"]["_id"] != oid:
-            pytest.fail(f"{event['documentKey']}, expected {oid}")
-
-    @staticmethod
-    def expect_drop_event(event: dict, db_name, coll_name):
-        if event["operationType"] != "drop":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'drop'")
-        if event["ns"]["db"] != db_name or event["ns"]["coll"] != coll_name:
-            pytest.fail(
-                f"ns='{event['ns']['db']}.{event['ns']['coll']}', "
-                + f"expected '{db_name}.{coll_name}'"
-            )
-
-    @staticmethod
-    def expect_drop_database_event(event: dict, db_name):
-        if event["operationType"] != "dropDatabase":
-            pytest.fail(f"operationType={event["operationType"]}, expected 'dropDatabase'")
-        if event["ns"]["db"] != db_name:
-            pytest.fail(f"ns='{event['ns']['db']}', expected '{db_name}'")
-
-    @classmethod
-    def compare_coll_options(cls, db_name, coll_name):
-        src_coll_options = cls.source[db_name][coll_name].options()
-        dst_coll_options = cls.target[db_name][coll_name].options()
+    def compare_coll_options(cls, coll_name):
+        src_coll_options = cls.source.test[coll_name].options()
+        dst_coll_options = cls.target.test[coll_name].options()
         if src_coll_options != dst_coll_options:
             pytest.fail(f"{dst_coll_options=}, expected {src_coll_options}")
 
     @classmethod
-    def compare_coll_indexes(cls, db_name, coll_name):
-        src_coll_indexes = cls.source[db_name][coll_name].index_information()
-        dst_coll_indexes = cls.target[db_name][coll_name].index_information()
+    def compare_coll_indexes(cls, coll_name):
+        src_coll_indexes = cls.source.test[coll_name].index_information()
+        dst_coll_indexes = cls.target.test[coll_name].index_information()
         if src_coll_indexes != dst_coll_indexes:
             pytest.fail(f"{dst_coll_indexes=}, expected {src_coll_indexes}")
 
     @classmethod
-    def compare_coll_content(cls, db_name, coll_name, **kwargs):
-        src_docs, src_hash = cls.coll_content(cls.source[db_name][coll_name])
-        dst_docs, dst_hash = cls.coll_content(cls.target[db_name][coll_name])
+    def compare_coll_content(cls, coll_name, **kwargs):
+        src_docs, src_hash = cls._coll_content(cls.source.test[coll_name])
+        dst_docs, dst_hash = cls._coll_content(cls.target.test[coll_name])
         if "count" in kwargs and len(src_docs) != kwargs["count"]:
             pytest.fail(f"{len(src_docs)=}, expected {kwargs["count"]}")
         if len(src_docs) != len(dst_docs):
@@ -121,7 +51,7 @@ class BaseTesting:
             pytest.fail(f"{dst_hash=}, expected {src_hash}")
 
     @staticmethod
-    def coll_content(coll: Collection):
+    def _coll_content(coll: Collection):
         docs, md5 = [], hashlib.md5()
         for data in coll.find_raw_batches():
             md5.update(data)
@@ -129,34 +59,91 @@ class BaseTesting:
         return docs, md5.hexdigest()
 
 
-class MongoLink:
-    def __init__(self, uri):
-        self.uri = uri
-        self.status()
+class Prepare:
+    def __init__(self, t: BaseTesting):
+        self.source: MongoClient = t.source
+        self.target: MongoClient = t.target
 
     def __enter__(self):
-        status = self.status()
-        if status["state"] == "running":
-            self.finalize()
-            for _ in range(5):
-                time.sleep(0.5)
-                status = self.status()
-                if status["state"] == "completed":
-                    break
-        self.start()
-
-        time.sleep(1)
         return self
 
     def __exit__(self, _t, _v, _tb):
-        status = self.status()
-        if status["state"] == "running":
-            self.finalize()
-            for _ in range(5):
-                time.sleep(0.5)
-                status = self.status()
-                if status["state"] == "completed":
-                    break
+        pass
+
+    def ensure_no_collection(self, coll_name):
+        self.source.test.drop_collection(coll_name)
+        self.target.test.drop_collection(coll_name)
+
+    def ensure_empty_collection(self, coll_name):
+        # todo: ensure the same collection options
+        self.ensure_no_collection(coll_name)
+        self.source.test.create_collection(coll_name)
+        self.target.test.create_collection(coll_name)
+
+    def ensure_view(self, view_name, source, pipeline):
+        # todo: ensure the same view options
+        self.ensure_no_collection(view_name)
+        self.source.test.create_collection(view_name, viewOn=source, pipeline=pipeline)
+        self.target.test.create_collection(view_name, viewOn=source, pipeline=pipeline)
+
+    def insert_documents(self, coll_name, documents):
+        self.source.test[coll_name].insert_many(documents)
+        self.target.test[coll_name].insert_many(documents)
+
+    def drop_all_collections(self):
+        for coll_name in self.source.test.list_collection_names():
+            if not coll_name.startswith("system."):
+                self.ensure_no_collection(coll_name)
+        for coll_name in self.target.test.list_collection_names():
+            if not coll_name.startswith("system."):
+                self.ensure_no_collection(coll_name)
+
+    def drop_database(self):
+        self.source.drop_database("test")
+        self.target.drop_database("test")
+
+
+class Perform:
+    def __init__(self, t: BaseTesting):
+        self.source: MongoClient = t.source
+        self.mlink = MongoLink(os.environ["TEST_MLINK_URI"])
+
+    def __enter__(self):
+        status = self.mlink.status()
+        if status["state"] == MongoLink.State.COMPLETING:
+            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+        elif status["state"] == MongoLink.State.RUNNING:
+            self.mlink.finalize()
+            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+
+        self.mlink.start()
+        self.mlink.wait_for_state(MongoLink.State.RUNNING)
+        return self
+
+    def __exit__(self, _t, exc, _tb):
+        if exc:
+            return
+
+        status = self.mlink.status()
+        if status["state"] == MongoLink.State.COMPLETING:
+            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+        elif status["state"] == MongoLink.State.RUNNING:
+            optime = self.source.server_info()["operationTime"]
+            self.mlink.wait_for_optime(optime)
+            self.mlink.finalize()
+            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+
+
+class MongoLink:
+
+    class State(StrEnum):
+        IDLE = "idle"
+        RUNNING = "running"
+        COMPLETING = "completing"
+        COMPLETED = "completed"
+
+    def __init__(self, uri):
+        self.uri = uri
 
     def status(self, **kwargs):
         res = requests.get(f"{self.uri}/status", timeout=kwargs.get("timeout", 5))
@@ -173,60 +160,22 @@ class MongoLink:
         res.raise_for_status()
         return res.json()
 
+    def wait_for_state(self, state):
+        status = self.status()
+        while status["state"] != state:
+            time.sleep(0.5)
+            status = self.status()
 
-class Prepare:
-    def __init__(self, t: BaseTesting):
-        self.source: MongoClient = t.source
-        self.target: MongoClient = t.target
+    def wait_for_optime(self, ts: bson.Timestamp):
+        status = self.status()
+        assert status["state"] == "running"
 
-    def __enter__(self):
-        return self
+        for _ in range(4):  # ~2 secs timeout
+            applied_optime: str = status.get("lastAppliedOpTime")
+            if applied_optime:
+                t_s, i_s = applied_optime.split(".")
+                if ts <= bson.Timestamp(int(t_s), int(i_s)):
+                    break
 
-    def __exit__(self, _t, _v, _tb):
-        pass
-
-    def ensure_no_collection(self, db_name, coll_name):
-        self.source[db_name].drop_collection(coll_name)
-        self.target[db_name].drop_collection(coll_name)
-
-    def ensure_empty_collection(self, db_name, coll_name, **kwargs):
-        # todo: ensure the same collection options
-        self.ensure_no_collection(db_name, coll_name)
-        self.source[db_name].create_collection(coll_name, **kwargs)
-        self.target[db_name].create_collection(coll_name, **kwargs)
-
-    def ensure_view(self, db_name, view_name, source, pipeline):
-        # todo: ensure the same view options
-        self.ensure_empty_collection(db_name, view_name, viewOn=source, pipeline=pipeline)
-
-    def insert_documents(self, db_name, coll_name, documents):
-        self.source[db_name][coll_name].insert_many(documents)
-        self.target[db_name][coll_name].insert_many(documents)
-
-    def drop_all_collections(self, db_name):
-        for coll_name in self.source[db_name].list_collection_names():
-            if not coll_name.startswith("system."):
-                self.ensure_no_collection(db_name, coll_name)
-        for coll_name in self.target[db_name].list_collection_names():
-            if not coll_name.startswith("system."):
-                self.ensure_no_collection(db_name, coll_name)
-
-    def drop_database(self, db_name):
-        self.source.drop_database(db_name)
-        self.target.drop_database(db_name)
-
-
-class ChangeStream:
-    def __init__(self, target: MongoClient):
-        self.target: MongoClient = target
-        self.stream = None
-
-    def __enter__(self):
-        self.stream = self.target.watch(show_expanded_events=True)
-        return self
-
-    def __exit__(self, _t, _v, _tb):
-        self.stream.close()
-
-    def next(self):
-        return self.stream.next()
+            time.sleep(0.5)
+            status = self.status()

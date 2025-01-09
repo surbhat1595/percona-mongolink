@@ -11,11 +11,11 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
-type MissedFieldError struct {
+type InvalidFieldError struct {
 	Name string
 }
 
-func (e MissedFieldError) Error() string {
+func (e InvalidFieldError) Error() string {
 	return "missed " + e.Name + " field"
 }
 
@@ -42,12 +42,12 @@ func createView(
 		case "viewOn":
 			viewOn, ok = e.Value.(string)
 			if !ok {
-				return MissedFieldError{"viewOn"}
+				return InvalidFieldError{"viewOn"}
 			}
 		case "pipeline":
 			pipeline, ok = e.Value.(bson.A)
 			if !ok {
-				return MissedFieldError{"pipeline"}
+				return InvalidFieldError{"pipeline"}
 			}
 		default:
 			log.Debug(ctx, "HandleCreate: unknown field", "ns", dbName+"."+collName)
@@ -80,13 +80,13 @@ func createCollection(
 		case "idIndex":
 			idIndex, ok := e.Value.(bson.D)
 			if !ok {
-				return MissedFieldError{"idIndex"}
+				return InvalidFieldError{"idIndex"}
 			}
 			opts = append(opts, bson.E{"idIndex", idIndex})
 		case "clusteredIndex":
 			clusteredIndex, ok := e.Value.(bson.D)
 			if !ok {
-				return MissedFieldError{"clusteredIndex"}
+				return InvalidFieldError{"clusteredIndex"}
 			}
 			opts = append(opts, bson.E{"clusteredIndex", clusteredIndex})
 		default:

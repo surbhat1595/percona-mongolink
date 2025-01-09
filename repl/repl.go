@@ -24,7 +24,8 @@ const (
 )
 
 type Status struct {
-	State State
+	State             State
+	LastAppliedOpTime primitive.Timestamp
 }
 
 type Replicator struct {
@@ -34,7 +35,10 @@ type Replicator struct {
 	stopC chan struct{}
 
 	state State
-	mu    sync.Mutex
+
+	lastAppliedOpTime primitive.Timestamp
+
+	mu sync.Mutex
 }
 
 func New(source, target *mongo.Client) *Replicator {
@@ -59,6 +63,7 @@ func (r *Replicator) Start(ctx context.Context) error {
 
 	r.stopC = make(chan struct{})
 	r.state = RunningState
+	r.lastAppliedOpTime = primitive.Timestamp{}
 
 	go func() {
 		err := r.do(context.TODO()) //nolint:contextcheck
@@ -120,7 +125,11 @@ func (r *Replicator) Status(ctx context.Context) (*Status, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return &Status{State: r.state}, nil
+	s := &Status{
+		State:             r.state,
+		LastAppliedOpTime: r.lastAppliedOpTime,
+	}
+	return s, nil
 }
 
 func (r *Replicator) runChangeApplication(
@@ -137,6 +146,7 @@ func (r *Replicator) runChangeApplication(
 	}
 	defer cur.Close(ctx)
 
+	var optime primitive.Timestamp
 	for {
 		select {
 		case <-r.stopC:
@@ -148,7 +158,13 @@ func (r *Replicator) runChangeApplication(
 		}
 
 		for cur.TryNext(ctx) {
-			err = applier.Apply(ctx, cur.Current)
+			optime, err = applier.Apply(ctx, cur.Current)
+			if err != nil || IsInvalidatedError(err) || IsUnsupportedEventError(err) {
+				r.mu.Lock()
+				r.lastAppliedOpTime = optime
+				r.mu.Unlock()
+			}
+
 			if IsInvalidatedError(err) {
 				opts := options.ChangeStream().
 					SetResumeAfter(cur.ResumeToken()).
