@@ -2,6 +2,7 @@ package repl
 
 import (
 	"context"
+	"fmt"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -9,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
+	"github.com/percona-lab/percona-mongolink/log"
 )
 
 var (
@@ -55,6 +57,8 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Time
 	}
 	clusterTime := primitive.Timestamp{T: t, I: i}
 
+	log.Debug(ctx, fmt.Sprintf("handling event: %s (optime: %d.%d)", opType, t, i))
+
 	var err error
 	switch opType {
 	case string(Create):
@@ -63,6 +67,10 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Time
 		err = h.handleDrop(ctx, data)
 	case string(DropDatabase):
 		err = h.handleDropDatabase(ctx, data)
+	case string(CreateIndexes):
+		err = h.handleCreateIndexes(ctx, data)
+	case string(DropIndexes):
+		err = h.handleDropIndexes(ctx, data)
 	case string(Insert):
 		err = h.handleInsert(ctx, data)
 	case string(Delete):
@@ -129,6 +137,63 @@ func (h *EventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) er
 
 	err = h.Client.Database(event.Namespace.Database).Drop(ctx)
 	return err //nolint:wrapcheck
+}
+
+func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
+	event, err := parseEvent[CreateIndexesEvent](data)
+	if err != nil {
+		return errors.Wrap(err, "parse")
+	}
+
+	indexes := []mongo.IndexModel{}
+	for _, indexSpec := range event.OperationDescription.Indexes {
+		indexOptions := options.IndexOptions{
+			Name:    &indexSpec.Name,
+			Version: &indexSpec.Version,
+		}
+
+		indexes = append(indexes, mongo.IndexModel{
+			Keys:    indexSpec.Keys,
+			Options: &indexOptions,
+		})
+	}
+
+	_, err = h.Client.Database(event.Namespace.Database).
+		Collection(event.Namespace.Collection).
+		Indexes().CreateMany(ctx, indexes)
+	return err //nolint:wrapcheck
+}
+
+func (h *EventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) error {
+	event, err := parseEvent[DropIndexesEvent](data)
+	if err != nil {
+		return errors.Wrap(err, "parse")
+	}
+
+	for _, index := range event.OperationDescription.Indexes {
+		// TODO: check $currentOp if the index is building
+		_, err = h.Client.Database(event.Namespace.Database).
+			Collection(event.Namespace.Collection).
+			Indexes().DropOne(ctx, index.Name)
+		if err != nil && !isIndexNotFound(err) {
+			return errors.Wrapf(err, "drop %s index in %s.%s",
+				index.Name,
+				event.Namespace.Database,
+				event.Namespace.Collection)
+		}
+	}
+
+	return nil
+}
+
+func isIndexNotFound(err error) bool {
+	for ; err != nil; err = errors.Unwrap(err) {
+		le, ok := err.(mongo.CommandError) //nolint:errorlint
+		if ok && le.Name == "IndexNotFound" {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *EventApplier) handleInsert(ctx context.Context, data bson.Raw) error {

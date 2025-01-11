@@ -16,7 +16,7 @@ type InvalidFieldError struct {
 }
 
 func (e InvalidFieldError) Error() string {
-	return "missed " + e.Name + " field"
+	return "invalid field: " + e.Name
 }
 
 type TimeseriesError struct {
