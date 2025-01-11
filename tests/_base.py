@@ -16,11 +16,8 @@ class BaseTesting:
     source: MongoClient
     target: MongoClient
 
-    def prepare(self):
-        return Prepare(self)
-
     def perform(self):
-        return Perform(self)
+        return MongoLinkRunner(self)
 
     @classmethod
     def compare_coll_options(cls, coll_name):
@@ -58,18 +55,6 @@ class BaseTesting:
             docs.extend(bson.decode_all(data))
         return docs, md5.hexdigest()
 
-
-class Prepare:
-    def __init__(self, t: BaseTesting):
-        self.source: MongoClient = t.source
-        self.target: MongoClient = t.target
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, _t, _v, _tb):
-        pass
-
     def ensure_no_collection(self, coll_name):
         self.source.test.drop_collection(coll_name)
         self.target.test.drop_collection(coll_name)
@@ -79,6 +64,14 @@ class Prepare:
         self.ensure_no_collection(coll_name)
         self.source.test.create_collection(coll_name)
         self.target.test.create_collection(coll_name)
+
+    def ensure_no_indexes(self, coll_name):
+        self.source.test[coll_name].drop_indexes()
+        self.target.test[coll_name].drop_indexes()
+
+    def create_index(self, coll_name, keys, **kwargs):
+        self.source.test[coll_name].create_index(keys, **kwargs)
+        self.source.test[coll_name].create_index(keys, **kwargs)
 
     def ensure_view(self, view_name, source, pipeline):
         # todo: ensure the same view options
@@ -103,7 +96,7 @@ class Prepare:
         self.target.drop_database("test")
 
 
-class Perform:
+class MongoLinkRunner:
     def __init__(self, t: BaseTesting):
         self.source: MongoClient = t.source
         self.mlink = MongoLink(os.environ["TEST_MLINK_URI"])
@@ -135,7 +128,6 @@ class Perform:
 
 
 class MongoLink:
-
     class State(StrEnum):
         IDLE = "idle"
         RUNNING = "running"

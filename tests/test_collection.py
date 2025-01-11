@@ -5,8 +5,7 @@ from _base import BaseTesting
 
 class TestCollection(BaseTesting):
     def test_create_implicitly(self):
-        with self.prepare() as it:
-            it.ensure_no_collection("coll_name")
+        self.ensure_no_collection("coll_name")
 
         with self.perform():
             self.source.test.coll_name.insert_one({})
@@ -15,30 +14,16 @@ class TestCollection(BaseTesting):
         self.compare_coll_indexes("coll_name")
 
     def test_create(self):
-        with self.prepare() as it:
-            it.ensure_no_collection("coll_name")
+        self.ensure_no_collection("coll_name")
 
         with self.perform():
             self.source.test.create_collection("coll_name")
-
-        self.compare_coll_options("coll_name")
-        self.compare_coll_indexes("coll_name")
-
-    @pytest.mark.xfail(reason="unsupported")
-    def test_create_with_unique_index(self):
-        with self.prepare() as it:
-            it.ensure_no_collection("coll_name")
-
-        with self.perform():
-            self.source.test.create_collection("coll_name")
-            self.source.test.coll_name.create_index({"i": 1, "unique": 1})
 
         self.compare_coll_options("coll_name")
         self.compare_coll_indexes("coll_name")
 
     def test_create_equal_uuid(self):
-        with self.prepare() as it:
-            it.ensure_no_collection("coll_name")
+        self.ensure_no_collection("coll_name")
 
         with self.perform():
             self.source.test.create_collection("coll_name")
@@ -52,8 +37,7 @@ class TestCollection(BaseTesting):
             pytest.xfail("collection UUID may not be equal")
 
     def test_create_with_clustered_index(self):
-        with self.prepare() as it:
-            it.ensure_no_collection("coll_name")
+        self.ensure_no_collection("coll_name")
 
         with self.perform():
             self.source.test.create_collection(
@@ -69,8 +53,7 @@ class TestCollection(BaseTesting):
 
     @pytest.mark.skip("capped collection is not unsupported yet")
     def test_create_capped(self):
-        with self.prepare() as it:
-            it.ensure_no_collection("coll_name")
+        self.ensure_no_collection("coll_name")
 
         with self.perform():
             self.source.test.create_collection("coll_name", capped=True, size=54321, max=12345)
@@ -79,10 +62,9 @@ class TestCollection(BaseTesting):
         self.compare_coll_indexes("coll_name")
 
     def test_create_view(self):
-        with self.prepare() as it:
-            it.ensure_empty_collection("coll_name")
-            it.insert_documents("coll_name", [{"i": i for i in range(10)}])
-            it.ensure_no_collection("view_name")
+        self.ensure_empty_collection("coll_name")
+        self.insert_documents("coll_name", [{"i": i for i in range(10)}])
+        self.ensure_no_collection("view_name")
 
         with self.perform():
             self.source.test.create_collection(
@@ -98,9 +80,8 @@ class TestCollection(BaseTesting):
         self.compare_coll_content("view_name")
 
     def test_drop_collection(self):
-        with self.prepare() as it:
-            it.drop_database()
-            it.ensure_empty_collection("coll_name")
+        self.drop_database()
+        self.ensure_empty_collection("coll_name")
 
         with self.perform():
             self.source.test.drop_collection("coll_name")
@@ -111,9 +92,8 @@ class TestCollection(BaseTesting):
             pytest.fail("'test' database must be dropped")
 
     def test_drop_view(self):
-        with self.prepare() as it:
-            it.ensure_empty_collection("coll_name")
-            it.ensure_view("view_name", "coll_name", [{"$match": {"i": {"$gt": 3}}}])
+        self.ensure_empty_collection("coll_name")
+        self.ensure_view("view_name", "coll_name", [{"$match": {"i": {"$gt": 3}}}])
 
         with self.perform():
             self.source.test.drop_collection("view_name")
@@ -124,9 +104,8 @@ class TestCollection(BaseTesting):
             pytest.fail("'test.coll_name' must not be dropped")
 
     def test_drop_database(self):
-        with self.prepare() as it:
-            it.drop_database()
-            it.ensure_empty_collection("coll_name")
+        self.drop_database()
+        self.ensure_empty_collection("coll_name")
 
         with self.perform():
             self.source.drop_database("test")
