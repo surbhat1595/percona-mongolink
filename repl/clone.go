@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -155,6 +156,35 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 	}
 
 	return errors.Wrap(errGrp.Wait(), "wait")
+}
+
+func (c *dataCloner) BuildIndexes(ctx context.Context) error {
+	for _, dbSpecs := range c.specs {
+		for _, spec := range dbSpecs {
+			for _, index := range spec.indexes {
+				if index.Name == spec.spec.IDIndex.Name {
+					continue
+				}
+
+				model := mongo.IndexModel{
+					Keys: index.KeysDocument,
+					Options: &options.IndexOptions{
+						Name:    &index.Name,
+						Version: &index.Version,
+					},
+				}
+
+				_, err := c.Destination.Database(spec.dbName).
+					Collection(spec.spec.Name).
+					Indexes().CreateOne(ctx, model)
+				if err != nil {
+					return errors.Wrap(err, "create index: "+index.Name)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error {

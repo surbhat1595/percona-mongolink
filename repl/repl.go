@@ -99,6 +99,11 @@ func (r *Replicator) do(ctx context.Context) error {
 		return errors.Wrap(err, "close")
 	}
 
+	err = cloner.BuildIndexes(ctx)
+	if err != nil {
+		return errors.Wrap(err, "build indexes")
+	}
+
 	log.Info(ctx, fmt.Sprintf("starting change application at %d.%d", startedAt.T, startedAt.I))
 	err = r.runChangeApplication(ctx, startedAt)
 	if err != nil {
