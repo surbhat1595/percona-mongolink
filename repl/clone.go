@@ -183,6 +183,7 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 						Name:    &index.Name,
 						Version: &index.Version,
 						Unique:  index.Unique,
+						Sparse:  index.Sparse,
 					},
 				}
 

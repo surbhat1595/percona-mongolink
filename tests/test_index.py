@@ -24,6 +24,16 @@ class TestClone(BaseTesting):
         self.compare_coll_options("coll_name")
         self.compare_coll_indexes("coll_name")
 
+    def test_create_sparse(self):
+        self.ensure_no_indexes("coll_name")
+        self.create_index("coll_name", {"i": 1}, sparse=True)
+
+        with self.perform():
+            pass
+
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+
 
 class TestApply(BaseTesting):
     def test_create(self):
@@ -40,6 +50,15 @@ class TestApply(BaseTesting):
 
         with self.perform():
             self.create_index("coll_name", {"i": 1}, unique=True)
+
+        self.compare_coll_options("coll_name")
+        self.compare_coll_indexes("coll_name")
+
+    def test_create_sparse(self):
+        self.ensure_no_indexes("coll_name")
+
+        with self.perform():
+            self.create_index("coll_name", {"i": 1}, sparse=True)
 
         self.compare_coll_options("coll_name")
         self.compare_coll_indexes("coll_name")

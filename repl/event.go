@@ -247,6 +247,7 @@ type indexSpec struct {
 	Keys    bson.D `bson:"key"`
 	Version int32  `bson:"v"`
 	Unique  *bool  `bson:"unique,omitempty"`
+	Sparse  *bool  `bson:"sparse,omitempty"`
 }
 
 // CreateIndexesEvent occurs when an index is created on the collection and
