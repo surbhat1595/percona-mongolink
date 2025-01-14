@@ -208,13 +208,13 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 		}
 	}
 
-	var options bson.D
+	var options createEventOptions
 	err := bson.Unmarshal(spec.spec.Options, &options)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createCollection(ctx, c.Destination, spec.dbName, spec.spec.Name, options)
+	err = createCollection(ctx, c.Destination, spec.dbName, spec.spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
@@ -253,13 +253,13 @@ func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
 		}
 	}
 
-	var options bson.D
+	var options createEventOptions
 	err := bson.Unmarshal(spec.spec.Options, &options)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createView(ctx, c.Destination, spec.dbName, spec.spec.Name, options)
+	err = createView(ctx, c.Destination, spec.dbName, spec.spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create view")
 	}

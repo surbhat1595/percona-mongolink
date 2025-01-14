@@ -8,7 +8,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/percona-lab/percona-mongolink/errors"
-	"github.com/percona-lab/percona-mongolink/log"
 )
 
 type InvalidFieldError struct {
@@ -32,29 +31,9 @@ func createView(
 	m *mongo.Client,
 	dbName string,
 	collName string,
-	options bson.D,
+	options *createEventOptions,
 ) error {
-	var viewOn string
-	var pipeline bson.A
-	for _, e := range options {
-		var ok bool
-		switch e.Key {
-		case "viewOn":
-			viewOn, ok = e.Value.(string)
-			if !ok {
-				return InvalidFieldError{"viewOn"}
-			}
-		case "pipeline":
-			pipeline, ok = e.Value.(bson.A)
-			if !ok {
-				return InvalidFieldError{"pipeline"}
-			}
-		default:
-			log.Debug(ctx, "HandleCreate: unknown field", "ns", dbName+"."+collName)
-		}
-	}
-
-	if strings.HasPrefix(viewOn, "system.buckets.") {
+	if strings.HasPrefix(options.ViewOn, "system.buckets.") {
 		return TimeseriesError{
 			NS: Namespace{
 				Database:   dbName,
@@ -63,7 +42,7 @@ func createView(
 		}
 	}
 
-	err := m.Database(dbName).CreateView(ctx, collName, viewOn, pipeline)
+	err := m.Database(dbName).CreateView(ctx, collName, options.ViewOn, options.Pipeline)
 	return errors.Wrap(err, "create view")
 }
 
@@ -72,25 +51,22 @@ func createCollection(
 	m *mongo.Client,
 	dbName string,
 	collName string,
-	options bson.D,
+	options *createEventOptions,
 ) error {
 	var opts bson.D
-	for _, e := range options {
-		switch e.Key {
-		case "idIndex":
-			idIndex, ok := e.Value.(bson.D)
-			if !ok {
-				return InvalidFieldError{"idIndex"}
-			}
-			opts = append(opts, bson.E{"idIndex", idIndex})
-		case "clusteredIndex":
-			clusteredIndex, ok := e.Value.(bson.D)
-			if !ok {
-				return InvalidFieldError{"clusteredIndex"}
-			}
-			opts = append(opts, bson.E{"clusteredIndex", clusteredIndex})
-		default:
-			log.Debug(ctx, "HandleCreate: unknown field", "ns", dbName+"."+collName)
+	if options.ClusteredIndex != nil {
+		opts = append(opts, bson.E{"clusteredIndex", options.ClusteredIndex})
+	} else {
+		opts = append(opts, bson.E{"idIndex", options.IDIndex})
+	}
+
+	if options.Capped {
+		opts = append(opts, bson.E{"capped", options.Capped})
+		if options.Size != 0 {
+			opts = append(opts, bson.E{"size", options.Size})
+		}
+		if options.Max != 0 {
+			opts = append(opts, bson.E{"max", options.Max})
 		}
 	}
 

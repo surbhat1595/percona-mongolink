@@ -215,9 +215,21 @@ type CreateEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription bson.D `bson:"operationDescription,omitempty"`
+	OperationDescription *createEventOptions `bson:"operationDescription,omitempty"`
 
 	BaseEvent `bson:",inline"`
+}
+
+type createEventOptions struct {
+	IDIndex        bson.D `bson:"idIndex,omitempty"`
+	ClusteredIndex bson.D `bson:"clusteredIndex,omitempty"`
+
+	Capped bool  `bson:"capped"`
+	Size   int32 `bson:"size"`
+	Max    int32 `bson:"max"`
+
+	ViewOn   string `bson:"viewOn"`
+	Pipeline []any  `bson:"pipeline"`
 }
 
 // DropEvent occurs when a collection is dropped from a database.

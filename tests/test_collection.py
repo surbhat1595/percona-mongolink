@@ -51,19 +51,19 @@ class TestCollection(BaseTesting):
         self.compare_coll_options("coll_name")
         self.compare_coll_indexes("coll_name")
 
-    @pytest.mark.skip("capped collection is not unsupported yet")
     def test_create_capped(self):
         self.ensure_no_collection("coll_name")
 
         with self.perform():
             self.source.test.create_collection("coll_name", capped=True, size=54321, max=12345)
+            self.source.test.coll_name.insert_many({"i": i} for i in range(10))
 
         self.compare_coll_options("coll_name")
         self.compare_coll_indexes("coll_name")
 
     def test_create_view(self):
         self.ensure_empty_collection("coll_name")
-        self.insert_documents("coll_name", [{"i": i for i in range(10)}])
+        self.insert_documents("coll_name", [{"i": i} for i in range(10)])
         self.ensure_no_collection("view_name")
 
         with self.perform():
@@ -82,6 +82,20 @@ class TestCollection(BaseTesting):
     def test_drop_collection(self):
         self.drop_database()
         self.ensure_empty_collection("coll_name")
+
+        with self.perform():
+            self.source.test.drop_collection("coll_name")
+
+        if "coll_name" in self.target.test.list_collection_names():
+            pytest.fail("'test.coll_name' must be dropped")
+        if "test" in self.target.list_database_names():
+            pytest.fail("'test' database must be dropped")
+
+    def test_drop_capped(self):
+        self.drop_database()
+        self.ensure_no_collection("coll_name")
+        self.source.test.create_collection("coll_name", capped=True, size=54321, max=12345)
+        self.source.test.coll_name.insert_many({"i": i} for i in range(10))
 
         with self.perform():
             self.source.test.drop_collection("coll_name")
