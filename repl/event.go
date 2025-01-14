@@ -242,14 +242,6 @@ type DropDatabaseEvent struct {
 	BaseEvent `bson:",inline"`
 }
 
-type indexSpec struct {
-	Name    string `bson:"name"`
-	Keys    bson.D `bson:"key"`
-	Version int32  `bson:"v"`
-	Unique  *bool  `bson:"unique,omitempty"`
-	Sparse  *bool  `bson:"sparse,omitempty"`
-}
-
 // CreateIndexesEvent occurs when an index is created on the collection and
 // the change stream has the showExpandedEvents option set to true.
 //
@@ -267,7 +259,7 @@ type CreateIndexesEvent struct {
 }
 
 type createIndexesOpDesc struct {
-	Indexes []indexSpec `bson:"indexes"`
+	Indexes []IndexSpecification `bson:"indexes"`
 }
 
 // CreateIndexesEvent occurs when an index is dropped from the collection and
@@ -287,7 +279,7 @@ type DropIndexesEvent struct {
 }
 
 type dropIndexesOpDesc struct {
-	Indexes []indexSpec `bson:"indexes"`
+	Indexes []IndexSpecification `bson:"indexes"`
 }
 
 // InsertEvent occurs when an operation adds documents to a collection.

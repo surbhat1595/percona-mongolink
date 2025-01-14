@@ -147,19 +147,19 @@ class MongoLink:
     def wait_for_state(self, state):
         status = self.status()
         while status["state"] != state:
-            time.sleep(0.5)
+            time.sleep(0.2)
             status = self.status()
 
     def wait_for_optime(self, ts: bson.Timestamp):
         status = self.status()
-        assert status["state"] == "running"
+        assert status["state"] == MongoLink.State.RUNNING
 
-        for _ in range(4):  # ~2 secs timeout
+        for _ in range(10):  # ~2 secs timeout
             applied_optime: str = status.get("lastAppliedOpTime")
             if applied_optime:
                 t_s, i_s = applied_optime.split(".")
                 if ts <= bson.Timestamp(int(t_s), int(i_s)):
                     break
 
-            time.sleep(0.5)
+            time.sleep(0.2)
             status = self.status()

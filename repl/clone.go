@@ -21,7 +21,20 @@ import (
 type collSpec struct {
 	dbName  string
 	spec    *mongo.CollectionSpecification
-	indexes []*mongo.IndexSpecification
+	indexes []IndexSpecification
+}
+
+type IndexSpecification struct {
+	Name               string   `bson:"name"`
+	Namespace          string   `bson:"ns"`
+	KeysDocument       bson.Raw `bson:"key"`
+	Version            int32    `bson:"v"`
+	ExpireAfterSeconds *int32   `bson:"expireAfterSeconds,omitempty"`
+	Sparse             *bool    `bson:"sparse,omitempty"`
+	Unique             *bool    `bson:"unique,omitempty"`
+	Clustered          *bool    `bson:"clustered,omitempty"`
+
+	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
 }
 
 func (s *collSpec) ns() string {
@@ -97,15 +110,20 @@ func (c *dataCloner) init(ctx context.Context) error {
 				}
 
 				grp.Go(func() error {
-					var indexes []*mongo.IndexSpecification
+					var indexes []IndexSpecification
 
 					if coll.Type == "collection" {
 						var err error
-						indexes, err = c.Source.Database(db.Name).
+						cur, err := c.Source.Database(db.Name).
 							Collection(coll.Name).
-							Indexes().ListSpecifications(grpCtx)
+							Indexes().List(grpCtx)
 						if err != nil {
 							return errors.Wrap(err, "list indexes")
+						}
+
+						err = cur.All(grpCtx, &indexes)
+						if err != nil {
+							return errors.Wrap(err, "decode indexes")
 						}
 					}
 
@@ -184,6 +202,8 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 						Version: &index.Version,
 						Unique:  index.Unique,
 						Sparse:  index.Sparse,
+
+						PartialFilterExpression: index.PartialFilterExpression,
 					},
 				}
 

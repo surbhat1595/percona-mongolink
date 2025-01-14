@@ -178,17 +178,19 @@ func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 	}
 
 	indexes := []mongo.IndexModel{}
-	for _, indexSpec := range event.OperationDescription.Indexes {
-		indexOptions := options.IndexOptions{
-			Name:    &indexSpec.Name,
-			Version: &indexSpec.Version,
-			Unique:  indexSpec.Unique,
-			Sparse:  indexSpec.Sparse,
+	for _, index := range event.OperationDescription.Indexes {
+		model := options.IndexOptions{
+			Name:    &index.Name,
+			Version: &index.Version,
+			Unique:  index.Unique,
+			Sparse:  index.Sparse,
+
+			PartialFilterExpression: index.PartialFilterExpression,
 		}
 
 		indexes = append(indexes, mongo.IndexModel{
-			Keys:    indexSpec.Keys,
-			Options: &indexOptions,
+			Keys:    index.KeysDocument,
+			Options: &model,
 		})
 	}
 
