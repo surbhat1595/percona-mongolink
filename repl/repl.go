@@ -19,8 +19,8 @@ type State string
 const (
 	IdleState       = "idle"
 	RunningState    = "running"
-	CompletingState = "completing"
-	CompletedState  = "completed"
+	FinalizingState = "finalizing"
+	FinalizedState  = "finalized"
 )
 
 type Status struct {
@@ -71,7 +71,7 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 
 	switch r.state {
 	case IdleState:
-	case CompletedState:
+	case FinalizedState:
 	default:
 		return errors.Errorf("wrong status %q. already running", r.state)
 	}
@@ -90,9 +90,9 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 			log.Error(ctx, "run", log.Err(err))
 		}
 
-		log.Info(ctx, "completed")
+		log.Info(ctx, "finalized")
 		r.mu.Lock()
-		r.state = CompletedState
+		r.state = FinalizedState
 		r.mu.Unlock()
 	}()
 
@@ -142,7 +142,9 @@ func (r *Replicator) Finalize(ctx context.Context) error {
 		return errors.Errorf("wrong status %q. expected %q", r.state, RunningState)
 	}
 
-	r.state = CompletingState
+	log.Info(ctx, "finalizing")
+
+	r.state = FinalizingState
 	close(r.stopC)
 	return nil
 }
@@ -179,7 +181,7 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 		select {
 		case <-r.stopC:
 			r.mu.Lock()
-			r.state = CompletedState
+			r.state = FinalizedState
 			r.mu.Unlock()
 			return nil
 		default:

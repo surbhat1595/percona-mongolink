@@ -95,11 +95,11 @@ class MongoLinkRunner:
 
     def __enter__(self):
         status = self.mlink.status()
-        if status["state"] == MongoLink.State.COMPLETING:
-            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+        if status["state"] == MongoLink.State.FINALIZING:
+            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
         elif status["state"] == MongoLink.State.RUNNING:
             self.mlink.finalize()
-            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
 
         self.mlink.start()
         self.mlink.wait_for_state(MongoLink.State.RUNNING)
@@ -110,21 +110,21 @@ class MongoLinkRunner:
             return
 
         status = self.mlink.status()
-        if status["state"] == MongoLink.State.COMPLETING:
-            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+        if status["state"] == MongoLink.State.FINALIZING:
+            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
         elif status["state"] == MongoLink.State.RUNNING:
             optime = self.source.server_info()["operationTime"]
             self.mlink.wait_for_optime(optime)
             self.mlink.finalize()
-            self.mlink.wait_for_state(MongoLink.State.COMPLETED)
+            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
 
 
 class MongoLink:
     class State(StrEnum):
         IDLE = "idle"
         RUNNING = "running"
-        COMPLETING = "completing"
-        COMPLETED = "completed"
+        FINALIZING = "finalizing"
+        FINALIZED = "finalized"
 
     def __init__(self, uri):
         self.uri = uri
