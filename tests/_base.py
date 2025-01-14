@@ -23,29 +23,21 @@ class BaseTesting:
     def compare_coll_options(cls, coll_name):
         src_coll_options = cls.source.test[coll_name].options()
         dst_coll_options = cls.target.test[coll_name].options()
-        if src_coll_options != dst_coll_options:
-            pytest.fail(f"{dst_coll_options=}, expected {src_coll_options}")
+        assert src_coll_options == dst_coll_options
 
     @classmethod
     def compare_coll_indexes(cls, coll_name):
         src_coll_indexes = cls.source.test[coll_name].index_information()
         dst_coll_indexes = cls.target.test[coll_name].index_information()
-        if src_coll_indexes != dst_coll_indexes:
-            pytest.fail(f"{dst_coll_indexes=}, expected {src_coll_indexes}")
+        assert src_coll_indexes == dst_coll_indexes
 
     @classmethod
-    def compare_coll_content(cls, coll_name, **kwargs):
+    def compare_coll_content(cls, coll_name):
         src_docs, src_hash = cls._coll_content(cls.source.test[coll_name])
         dst_docs, dst_hash = cls._coll_content(cls.target.test[coll_name])
-        if "count" in kwargs and len(src_docs) != kwargs["count"]:
-            pytest.fail(f"{len(src_docs)=}, expected {kwargs["count"]}")
-        if len(src_docs) != len(dst_docs):
-            pytest.fail(f"{len(dst_docs)=}, expected {len(src_docs)}")
-        for a, b in zip(src_docs, dst_docs):
-            if a != b:
-                print(f"{a=} {b=}")
-        if src_hash != dst_hash:
-            pytest.fail(f"{dst_hash=}, expected {src_hash}")
+        assert len(src_docs) == len(dst_docs)
+        assert src_docs == dst_docs
+        assert src_hash == dst_hash
 
     @staticmethod
     def _coll_content(coll: Collection):

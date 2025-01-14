@@ -73,8 +73,7 @@ class TestCollection(BaseTesting):
                 pipeline=[{"$match": {"i": {"$gt": 3}}}],
             )
 
-        if "view_name" not in self.target.test.list_collection_names():
-            pytest.fail("'test.view_name' must be present")
+        assert "view_name" in self.target.test.list_collection_names()
 
         self.compare_coll_options("view_name")
         self.compare_coll_content("view_name")
@@ -86,10 +85,8 @@ class TestCollection(BaseTesting):
         with self.perform():
             self.source.test.drop_collection("coll_name")
 
-        if "coll_name" in self.target.test.list_collection_names():
-            pytest.fail("'test.coll_name' must be dropped")
-        if "test" in self.target.list_database_names():
-            pytest.fail("'test' database must be dropped")
+        assert "coll_name" not in self.target.test.list_collection_names()
+        assert "test" not in self.target.list_database_names()
 
     def test_drop_capped(self):
         self.drop_database()
@@ -100,10 +97,8 @@ class TestCollection(BaseTesting):
         with self.perform():
             self.source.test.drop_collection("coll_name")
 
-        if "coll_name" in self.target.test.list_collection_names():
-            pytest.fail("'test.coll_name' must be dropped")
-        if "test" in self.target.list_database_names():
-            pytest.fail("'test' database must be dropped")
+        assert "coll_name" not in self.target.test.list_collection_names()
+        assert "test" not in self.target.list_database_names()
 
     def test_drop_view(self):
         self.ensure_empty_collection("coll_name")
@@ -112,10 +107,8 @@ class TestCollection(BaseTesting):
         with self.perform():
             self.source.test.drop_collection("view_name")
 
-        if "view_name" in self.target.test.list_collection_names():
-            pytest.fail("'test.view_name' must be dropped")
-        if "coll_name" not in self.target.test.list_collection_names():
-            pytest.fail("'test.coll_name' must not be dropped")
+        assert "view_name" not in self.target.test.list_collection_names()
+        assert "coll_name" in self.target.test.list_collection_names()
 
     def test_drop_database(self):
         self.drop_database()
@@ -124,5 +117,4 @@ class TestCollection(BaseTesting):
         with self.perform():
             self.source.drop_database("test")
 
-        if "test" in self.target.list_database_names():
-            pytest.fail("'test' database must be dropped")
+        assert "test" not in self.target.list_database_names()
