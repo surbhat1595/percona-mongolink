@@ -182,6 +182,7 @@ func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 		indexOptions := options.IndexOptions{
 			Name:    &indexSpec.Name,
 			Version: &indexSpec.Version,
+			Unique:  indexSpec.Unique,
 		}
 
 		indexes = append(indexes, mongo.IndexModel{

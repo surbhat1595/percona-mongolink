@@ -243,9 +243,10 @@ type DropDatabaseEvent struct {
 }
 
 type indexSpec struct {
-	Name    string         `bson:"name"`
-	Keys    map[string]any `bson:"key"`
-	Version int32          `bson:"v"`
+	Name    string `bson:"name"`
+	Keys    bson.D `bson:"key"`
+	Version int32  `bson:"v"`
+	Unique  *bool  `bson:"unique,omitempty"`
 }
 
 // CreateIndexesEvent occurs when an index is created on the collection and
