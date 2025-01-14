@@ -184,6 +184,7 @@ func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 			Version: &index.Version,
 			Unique:  index.Unique,
 			Sparse:  index.Sparse,
+			Hidden:  index.Hidden,
 
 			PartialFilterExpression: index.PartialFilterExpression,
 		}

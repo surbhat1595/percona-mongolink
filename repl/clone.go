@@ -33,6 +33,7 @@ type IndexSpecification struct {
 	Sparse             *bool    `bson:"sparse,omitempty"`
 	Unique             *bool    `bson:"unique,omitempty"`
 	Clustered          *bool    `bson:"clustered,omitempty"`
+	Hidden             *bool    `bson:"hidden,omitempty"`
 
 	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
 }
@@ -202,6 +203,7 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 						Version: &index.Version,
 						Unique:  index.Unique,
 						Sparse:  index.Sparse,
+						Hidden:  index.Hidden,
 
 						PartialFilterExpression: index.PartialFilterExpression,
 					},
