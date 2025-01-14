@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -13,17 +14,12 @@ import (
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
-var (
-	ErrInvalidOpTypeField = errors.New("invalid operationType field")
-	ErrClusterTimeField   = errors.New("invalid clusterTime field")
-)
-
 type UnsupportedEventError struct {
-	OpType string
+	OpType OperationType
 }
 
 func (e UnsupportedEventError) Error() string {
-	return "unsupported type: " + e.OpType
+	return "unsupported type: " + string(e.OpType)
 }
 
 func IsUnsupportedEventError(err error) bool {
@@ -44,61 +40,99 @@ func IsInvalidatedError(err error) bool {
 
 type EventApplier struct {
 	Client *mongo.Client
+
+	Drop bool
+
+	IncludeNS []string
+	ExcludeNS []string
 }
 
 func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Timestamp, error) {
-	opType, ok := data.Lookup("operationType").StringValueOK()
-	if !ok {
-		return primitive.Timestamp{}, ErrInvalidOpTypeField
+	var baseEvent BaseEvent
+	err := bson.Unmarshal(data, &baseEvent)
+	if err != nil {
+		return primitive.Timestamp{}, errors.Wrap(err, "failed to decode base event")
 	}
-	t, i, ok := data.Lookup("clusterTime").TimestampOK()
-	if !ok {
-		return primitive.Timestamp{}, ErrClusterTimeField
+
+	fullNS := baseEvent.Namespace.Database
+	if baseEvent.Namespace.Collection != "" {
+		fullNS += "." + baseEvent.Namespace.Collection
 	}
-	clusterTime := primitive.Timestamp{T: t, I: i}
+	if len(h.IncludeNS) != 0 && !slices.Contains(h.IncludeNS, fullNS) {
+		log.Debug(ctx, "apply: not included", "ns", fullNS)
+		return baseEvent.ClusterTime, nil
+	}
+	if len(h.ExcludeNS) != 0 && slices.Contains(h.ExcludeNS, fullNS) {
+		log.Debug(ctx, "apply: excluded", "ns", fullNS)
+		return baseEvent.ClusterTime, nil
+	}
 
-	log.Debug(ctx, fmt.Sprintf("handling event: %s (optime: %d.%d)", opType, t, i))
+	log.Debug(ctx, fmt.Sprintf("handling event: %s (ts: %d.%d, ns: %s)",
+		baseEvent.OperationType,
+		baseEvent.ClusterTime.T,
+		baseEvent.ClusterTime.I,
+		fullNS))
 
-	var err error
-	switch opType {
-	case string(Create):
+	switch baseEvent.OperationType {
+	case Create:
 		err = h.handleCreate(ctx, data)
-	case string(Drop):
+	case Drop:
 		err = h.handleDrop(ctx, data)
-	case string(DropDatabase):
+	case DropDatabase:
 		err = h.handleDropDatabase(ctx, data)
-	case string(CreateIndexes):
+	case CreateIndexes:
 		err = h.handleCreateIndexes(ctx, data)
-	case string(DropIndexes):
+	case DropIndexes:
 		err = h.handleDropIndexes(ctx, data)
-	case string(Insert):
+	case Insert:
 		err = h.handleInsert(ctx, data)
-	case string(Delete):
+	case Delete:
 		err = h.handleDelete(ctx, data)
-	case string(Replace):
+	case Replace:
 		err = h.handleReplace(ctx, data)
-	case string(Update):
+	case Update:
 		err = h.handleUpdate(ctx, data)
 
-	case string(Invalidate):
+	case Invalidate:
 		event, err := parseEvent[InvalidateEvent](data)
 		if err != nil {
-			return clusterTime, errors.Wrap(err, "invalidate: parse")
+			return baseEvent.ClusterTime, errors.Wrap(err, "invalidate: parse")
 		}
 
-		return clusterTime, &InvalidatedError{event.ID}
+		return baseEvent.ClusterTime, &InvalidatedError{event.ID}
+
+	case Rename:
+		fallthrough
+	case Modify:
+		fallthrough
+	case ShardCollection:
+		fallthrough
+	case ReshardCollection:
+		fallthrough
+	case RefineCollectionShardKey:
+		fallthrough
 
 	default:
-		return clusterTime, &UnsupportedEventError{OpType: opType}
+		return baseEvent.ClusterTime, &UnsupportedEventError{OpType: baseEvent.OperationType}
 	}
 
-	return clusterTime, errors.Wrap(err, opType)
+	return baseEvent.ClusterTime, errors.Wrap(err, string(baseEvent.OperationType))
 }
 
 func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
+	}
+
+	if h.Drop {
+		err = dropCollection(ctx,
+			h.Client,
+			event.Namespace.Database,
+			event.Namespace.Collection)
+		if err != nil {
+			return errors.Wrap(err, "drop before create")
+		}
 	}
 
 	if event.CollectionUUID == nil {
@@ -124,9 +158,7 @@ func (h *EventApplier) handleDrop(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
-	err = h.Client.Database(event.Namespace.Database).
-		Collection(event.Namespace.Collection).Drop(ctx)
-	return err //nolint:wrapcheck
+	return dropCollection(ctx, h.Client, event.Namespace.Database, event.Namespace.Collection)
 }
 
 func (h *EventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) error {

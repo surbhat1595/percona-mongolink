@@ -143,7 +143,7 @@ class MongoLink:
         return res.json()
 
     def start(self, **kwargs):
-        res = requests.post(f"{self.uri}/start", timeout=kwargs.get("timeout", 5))
+        res = requests.post(f"{self.uri}/start", json={}, timeout=kwargs.get("timeout", 5))
         res.raise_for_status()
         return res.json()
 

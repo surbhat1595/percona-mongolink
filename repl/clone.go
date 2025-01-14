@@ -3,6 +3,7 @@ package repl
 import (
 	"context"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -31,6 +32,9 @@ type dataCloner struct {
 	Source      *mongo.Client
 	Destination *mongo.Client
 	Drop        bool
+
+	IncludeNS []string
+	ExcludeNS []string
 
 	specs map[string][]*collSpec
 
@@ -81,6 +85,13 @@ func (c *dataCloner) init(ctx context.Context) error {
 			mu.Unlock()
 
 			for _, coll := range colls {
+				fullNS := db.Name + "." + coll.Name
+				if len(c.IncludeNS) != 0 && !slices.Contains(c.IncludeNS, fullNS) {
+					continue
+				}
+				if len(c.ExcludeNS) != 0 && slices.Contains(c.ExcludeNS, fullNS) {
+					continue
+				}
 				if strings.HasPrefix(coll.Name, "system.") {
 					continue
 				}

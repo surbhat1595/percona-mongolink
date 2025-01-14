@@ -98,3 +98,8 @@ func createCollection(
 	res := m.Database(dbName).RunCommand(ctx, cmd)
 	return errors.Wrap(res.Err(), "create collection")
 }
+
+func dropCollection(ctx context.Context, m *mongo.Client, dbName, collName string) error {
+	err := m.Database(dbName).Collection(collName).Drop(ctx)
+	return errors.Wrap(err, "drop collection")
+}

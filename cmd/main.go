@@ -130,7 +130,26 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log.Info(ctx, "/start")
 
-	err := s.repl.Start(ctx)
+	var params startRequest
+	err := json.NewDecoder(r.Body).Decode(&params)
+	if err != nil {
+		log.Error(ctx, "decode request body", log.Err(err))
+		err := json.NewEncoder(w).Encode(startReponse{Error: err.Error()})
+		if err != nil {
+			log.Error(ctx, "write status", log.Err(err))
+			internalServerError(w)
+		}
+		return
+	}
+
+	options := &repl.StartOptions{
+		DropBeforeCreate: true,
+		// TODO: uncomment when tests will be added
+		// DropBeforeCreate: params.DropBeforeCreate,
+		// IncludeNamespaces: params.IncludeNamespaces,
+		// ExcludeNamespaces: params.ExcludeNamespaces,
+	}
+	err = s.repl.Start(ctx, options)
 	if err != nil {
 		log.Error(ctx, "start replication", log.Err(err))
 		err := json.NewEncoder(w).Encode(startReponse{Error: err.Error()})
@@ -199,6 +218,13 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		log.Error(ctx, "write status", log.Err(err))
 		internalServerError(w)
 	}
+}
+
+type startRequest struct {
+	// TODO: uncomment when tests will be added
+	// DropBeforeCreate bool `json:"dropBeforeCreateCollection"`
+	// IncludeNamespaces []string `json:"includeNamespaces,omitempty"`
+	// ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
 }
 
 type startReponse struct {

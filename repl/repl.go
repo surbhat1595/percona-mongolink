@@ -32,6 +32,10 @@ type Replicator struct {
 	src  *mongo.Client
 	dest *mongo.Client
 
+	drop      bool
+	includeNS []string
+	excludeNS []string
+
 	stopC chan struct{}
 
 	state State
@@ -50,9 +54,20 @@ func New(source, target *mongo.Client) *Replicator {
 	return r
 }
 
-func (r *Replicator) Start(ctx context.Context) error {
+type StartOptions struct {
+	DropBeforeCreate bool
+
+	IncludeNamespaces []string
+	ExcludeNamespaces []string
+}
+
+func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if options == nil {
+		options = &StartOptions{}
+	}
 
 	switch r.state {
 	case IdleState:
@@ -60,6 +75,10 @@ func (r *Replicator) Start(ctx context.Context) error {
 	default:
 		return errors.Errorf("wrong status %q. already running", r.state)
 	}
+
+	r.drop = options.DropBeforeCreate
+	r.includeNS = options.IncludeNamespaces
+	r.excludeNS = options.ExcludeNamespaces
 
 	r.stopC = make(chan struct{})
 	r.state = RunningState
@@ -91,7 +110,9 @@ func (r *Replicator) do(ctx context.Context) error {
 	cloner := dataCloner{
 		Source:      r.src,
 		Destination: r.dest,
-		Drop:        true, // todo: expose
+		Drop:        r.drop,
+		IncludeNS:   r.includeNS,
+		ExcludeNS:   r.excludeNS,
 	}
 
 	err = cloner.Clone(ctx)
@@ -137,11 +158,13 @@ func (r *Replicator) Status(ctx context.Context) (*Status, error) {
 	return s, nil
 }
 
-func (r *Replicator) runChangeApplication(
-	ctx context.Context,
-	startAt primitive.Timestamp,
-) error {
-	applier := &EventApplier{Client: r.dest}
+func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive.Timestamp) error {
+	applier := &EventApplier{
+		Client:    r.dest,
+		Drop:      r.drop,
+		IncludeNS: r.includeNS,
+		ExcludeNS: r.excludeNS,
+	}
 	opts := options.ChangeStream().
 		SetStartAtOperationTime(&startAt).
 		SetShowExpandedEvents(true)
@@ -164,18 +187,21 @@ func (r *Replicator) runChangeApplication(
 
 		for cur.TryNext(ctx) {
 			optime, err = applier.Apply(ctx, cur.Current)
-			if err != nil || IsInvalidatedError(err) || IsUnsupportedEventError(err) {
-				r.mu.Lock()
-				r.lastAppliedOpTime = optime
-				r.mu.Unlock()
-			}
 
+			if IsUnsupportedEventError(err) {
+				r.updateLastAppliedOpTime(optime)
+				continue
+			}
 			if IsInvalidatedError(err) {
+				r.updateLastAppliedOpTime(optime)
+
 				opts := options.ChangeStream().
 					SetResumeAfter(cur.ResumeToken()).
 					SetShowExpandedEvents(true)
+				// TODO: use include/exclude namespaces in pipeline
 				cur, err = r.src.Watch(ctx, mongo.Pipeline{}, opts)
 			}
+
 			if err != nil {
 				return errors.Wrap(err, "resume change stream")
 			}
@@ -188,4 +214,10 @@ func (r *Replicator) runChangeApplication(
 
 		log.Debug(ctx, "no documents yet")
 	}
+}
+
+func (r *Replicator) updateLastAppliedOpTime(optime primitive.Timestamp) {
+	r.mu.Lock()
+	r.lastAppliedOpTime = optime
+	r.mu.Unlock()
 }
