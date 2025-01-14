@@ -1,4 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+from datetime import datetime
+
 import pytest
 from _base import BaseTesting
 
@@ -77,6 +79,36 @@ class TestCollection(BaseTesting):
 
         self.compare_coll_options("view_name")
         self.compare_coll_content("view_name")
+
+    def test_do_not_clone_timeseries(self):
+        self.drop_database()
+
+        self.source.test.create_collection(
+            "coll_name",
+            timeseries={"timeField": "ts", "metaField": "meta"},
+        )
+        self.source.test.coll_name.insert_many(
+            {"ts": datetime.now(), "meta": {"i": i}} for i in range(10)
+        )
+
+        with self.perform():
+            pass
+
+        assert "test" not in self.target.list_database_names()
+
+    def test_do_not_create_timeseries(self):
+        self.drop_database()
+
+        with self.perform():
+            self.source.test.create_collection(
+                "coll_name",
+                timeseries={"timeField": "ts", "metaField": "meta"},
+            )
+            self.source.test.coll_name.insert_many(
+                {"ts": datetime.now(), "meta": {"i": i}} for i in range(10)
+            )
+
+        assert "test" not in self.target.list_database_names()
 
     def test_drop_collection(self):
         self.drop_database()

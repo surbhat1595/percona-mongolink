@@ -54,10 +54,7 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Time
 		return primitive.Timestamp{}, errors.Wrap(err, "failed to decode base event")
 	}
 
-	fullNS := baseEvent.Namespace.Database
-	if baseEvent.Namespace.Collection != "" {
-		fullNS += "." + baseEvent.Namespace.Collection
-	}
+	fullNS := baseEvent.Namespace.String()
 	if len(h.IncludeNS) != 0 && !slices.Contains(h.IncludeNS, fullNS) {
 		log.Debug(ctx, "apply: not included", "ns", fullNS)
 		return baseEvent.ClusterTime, nil
@@ -125,6 +122,11 @@ func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 		return errors.Wrap(err, "parse")
 	}
 
+	if event.IsTimeseries() {
+		log.Warn(ctx, "timeseries is not supported. skip", "ns", event.Namespace.String())
+		return nil
+	}
+
 	if h.Drop {
 		err = dropCollection(ctx,
 			h.Client,
@@ -135,7 +137,7 @@ func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 		}
 	}
 
-	if event.CollectionUUID == nil {
+	if event.IsView() {
 		return createView(ctx,
 			h.Client,
 			event.Namespace.Database,
@@ -213,10 +215,7 @@ func (h *EventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) err
 			Collection(event.Namespace.Collection).
 			Indexes().DropOne(ctx, index.Name)
 		if err != nil && !isIndexNotFound(err) {
-			return errors.Wrapf(err, "drop %s index in %s.%s",
-				index.Name,
-				event.Namespace.Database,
-				event.Namespace.Collection)
+			return errors.Wrapf(err, "drop %s index in %s", index.Name, event.Namespace)
 		}
 	}
 

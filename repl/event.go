@@ -2,6 +2,8 @@
 package repl
 
 import (
+	"strings"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
@@ -91,6 +93,18 @@ type Namespace struct {
 
 	// Collection is the name of the collection where the event occurred.
 	Collection string `bson:"coll"`
+}
+
+func (ns Namespace) String() string {
+	var rv string
+
+	if ns.Collection != "" {
+		rv = ns.Database + "." + ns.Collection
+	} else {
+		rv = ns.Database
+	}
+
+	return rv
 }
 
 // InvalidateEvent occurs when an operation renders the change stream invalid.
@@ -218,6 +232,14 @@ type CreateEvent struct {
 	OperationDescription *createEventOptions `bson:"operationDescription,omitempty"`
 
 	BaseEvent `bson:",inline"`
+}
+
+func (e CreateEvent) IsView() bool {
+	return e.CollectionUUID == nil
+}
+
+func (e CreateEvent) IsTimeseries() bool {
+	return strings.HasPrefix(e.OperationDescription.ViewOn, "system.buckets.")
 }
 
 type createEventOptions struct {

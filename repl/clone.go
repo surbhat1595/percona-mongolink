@@ -174,7 +174,7 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 				case "view":
 					err = c.cloneView(ctx, spec)
 				case "timeseries":
-					log.Info(ctx, "timeseries is not supported. skip", "ns", spec.ns())
+					log.Warn(ctx, "timeseries is not supported. skip", "ns", spec.ns())
 				}
 				if err != nil {
 					return errors.Wrap(err, "clone "+spec.ns())

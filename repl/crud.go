@@ -23,7 +23,7 @@ type TimeseriesError struct {
 }
 
 func (e TimeseriesError) Error() string {
-	return "unsupported timeseries: " + e.NS.Database + "." + e.NS.Collection
+	return "unsupported timeseries: " + e.NS.String()
 }
 
 func createView(
