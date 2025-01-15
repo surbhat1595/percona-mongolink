@@ -3,7 +3,6 @@ package repl
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -43,8 +42,7 @@ type EventApplier struct {
 
 	Drop bool
 
-	IncludeNS []string
-	ExcludeNS []string
+	IsSelected FilterFunc
 }
 
 func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Timestamp, error) {
@@ -55,13 +53,11 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Time
 	}
 
 	fullNS := baseEvent.Namespace.String()
-	if len(h.IncludeNS) != 0 && !slices.Contains(h.IncludeNS, fullNS) {
-		log.Debug(ctx, "apply: not included", "ns", fullNS)
+	if !h.IsSelected(baseEvent.Namespace.Database, baseEvent.Namespace.Collection) {
+		log.Debug(ctx, "apply: not selected", "ns", fullNS)
 		return baseEvent.ClusterTime, nil
-	}
-	if len(h.ExcludeNS) != 0 && slices.Contains(h.ExcludeNS, fullNS) {
-		log.Debug(ctx, "apply: excluded", "ns", fullNS)
-		return baseEvent.ClusterTime, nil
+	} else {
+		log.Debug(ctx, "apply: selected", "ns", fullNS)
 	}
 
 	log.Debug(ctx, fmt.Sprintf("handling event: %s (ts: %d.%d, ns: %s)",
@@ -241,8 +237,7 @@ func (h *EventApplier) handleInsert(ctx context.Context, data bson.Raw) error {
 	// use replaceOne to ensure the changed version
 	_, err = h.Client.Database(event.Namespace.Database).
 		Collection(event.Namespace.Collection).
-		ReplaceOne(ctx, event.DocumentKey, event.FullDocument,
-			options.Replace().SetUpsert(true))
+		InsertOne(ctx, event.FullDocument)
 
 	return err //nolint:wrapcheck
 }

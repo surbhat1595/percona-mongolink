@@ -17,27 +17,64 @@ class BaseTesting:
     _mlink: MLink
 
     def perform(self, phase: Runner.Phase):
-        return Runner(self.source, self._mlink, phase)
+        return self.perform_with_options(phase, {})
+
+    def perform_with_options(
+        self,
+        phase: Runner.Phase,
+        include_ns=None,
+        exclude_ns=None,
+    ):
+        mlink_options = {}
+        if include_ns:
+            mlink_options["includeNamespaces"] = include_ns
+        if exclude_ns:
+            mlink_options["excludeNamespaces"] = exclude_ns
+        return Runner(self.source, self._mlink, phase, mlink_options)
+
+    @classmethod
+    def all_target_namespaces(cls):
+        rv = set()
+        for db in cls.target.list_database_names():
+            if db in ("admin", "config", "local"):
+                continue
+            for coll in cls.target[db].list_collection_names():
+                rv.add(f"{db}.{coll}")
+        return rv
 
     @classmethod
     def compare_all(cls):
         src_dbs = cls.list_databases(cls.source)
         dst_dbs = cls.list_databases(cls.target)
-        assert src_dbs == dst_dbs
+        assert src_dbs == dst_dbs, f"{src_dbs} != {dst_dbs}"
 
         for db in src_dbs:
             src_colls = cls.list_namespaces(cls.source, db)
             dst_colls = cls.list_namespaces(cls.target, db)
-            assert src_colls == dst_colls
+            assert src_colls == dst_colls, f"{src_colls} != {dst_colls}"
 
             for coll in src_colls:
+                cls.compare_namespace(db, coll)
+
+    @classmethod
+    def check_if_target_is_subset(cls):
+        src_dbs = cls.list_databases(cls.source)
+        dst_dbs = cls.list_databases(cls.target)
+        assert set(dst_dbs).issubset(src_dbs)
+
+        for db in dst_dbs:
+            src_colls = cls.list_namespaces(cls.source, db)
+            dst_colls = cls.list_namespaces(cls.target, db)
+            assert set(dst_colls).issubset(src_colls)
+
+            for coll in dst_colls:
                 cls.compare_namespace(db, coll)
 
     @staticmethod
     def list_databases(client: MongoClient):
         rv = set()
         for name in client.list_database_names():
-            if name not in ("local", "admin", "config"):
+            if name not in ("admin", "config", "local"):
                 rv.add(name)
         return rv
 
@@ -73,6 +110,14 @@ class BaseTesting:
             md5.update(data)
             docs.extend(bson.decode_all(data))
         return docs, md5.hexdigest()
+
+    def drop_all_database(self):
+        for db in self.source.list_database_names():
+            if db not in ("admin", "config", "local"):
+                self.source.drop_database(db)
+        for db in self.target.list_database_names():
+            if db not in ("admin", "config", "local"):
+                self.target.drop_database(db)
 
     def drop_database(self, db: str):
         self.source.drop_database(db)

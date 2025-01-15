@@ -2,8 +2,8 @@ package repl
 
 import (
 	"context"
+	"fmt"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 
@@ -55,8 +55,7 @@ type dataCloner struct {
 	Destination *mongo.Client
 	Drop        bool
 
-	IncludeNS []string
-	ExcludeNS []string
+	IsSelected FilterFunc
 
 	specs map[string][]*collSpec
 
@@ -107,15 +106,14 @@ func (c *dataCloner) init(ctx context.Context) error {
 			mu.Unlock()
 
 			for _, coll := range colls {
-				fullNS := db.Name + "." + coll.Name
-				if len(c.IncludeNS) != 0 && !slices.Contains(c.IncludeNS, fullNS) {
-					continue
-				}
-				if len(c.ExcludeNS) != 0 && slices.Contains(c.ExcludeNS, fullNS) {
-					continue
-				}
 				if strings.HasPrefix(coll.Name, "system.") {
 					continue
+				}
+				if !c.IsSelected(db.Name, coll.Name) {
+					log.Debug(ctx, fmt.Sprintf("not selected %s.%s", db.Name, coll.Name))
+					continue
+				} else {
+					log.Debug(ctx, fmt.Sprintf("selected %s.%s", db.Name, coll.Name))
 				}
 
 				grp.Go(func() error {
@@ -175,6 +173,7 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
 			errGrp.Go(func() error {
+				log.Debug(ctx, fmt.Sprintf("processing %s.%s", spec.dbName, spec.spec.Name))
 				var err error
 				switch spec.spec.Type {
 				case "collection":

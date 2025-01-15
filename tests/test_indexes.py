@@ -12,7 +12,7 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.create_index("db_1", "coll_1", {"i": 1})
+            self.source["db_1"]["coll_1"].create_index({"i": 1})
 
         self.compare_all()
 
@@ -21,7 +21,7 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.create_index("db_1", "coll_1", {"i": 1}, unique=True)
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, unique=True)
 
         self.compare_all()
 
@@ -30,7 +30,7 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.create_index("db_1", "coll_1", {"i": 1}, sparse=True)
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, sparse=True)
 
         self.compare_all()
 
@@ -39,7 +39,10 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.create_index("db_1", "coll_1", {"i": 1}, partialFilterExpression={"j": {"$gt": 5}})
+            self.source["db_1"]["coll_1"].create_index(
+                {"i": 1},
+                partialFilterExpression={"j": {"$gt": 5}},
+            )
 
         self.compare_all()
 
@@ -48,17 +51,17 @@ class TestIndexes(BaseTesting):
         self.create_collection("db_1", "coll_1")
 
         with self.perform(phase):
-            self.create_index("db_1", "coll_1", {"i": 1}, hidden=True)
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, hidden=True)
 
         self.compare_all()
 
     def test_drop_cloned(self, phase):
         self.drop_database("db_1")
         self.create_collection("db_1", "coll_1")
-        index_name = self.source["db_1"]["coll_1"].create_index({"i": 1})
+        self.create_index("db_1", "coll_1", [("i", 1)])
 
         with self.perform(phase):
-            self.source["db_1"]["coll_1"].drop_index(index_name)
+            self.source["db_1"]["coll_1"].drop_index([("i", 1)])
 
         self.compare_all()
 

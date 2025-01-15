@@ -1,5 +1,6 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import time
+from dataclasses import dataclass
 from enum import StrEnum
 
 import bson
@@ -38,21 +39,25 @@ class Runner:
         CLONE = "phase:clone"
         APPLY = "phase:apply"
 
-    def __init__(self, source: MongoClient, mlink: MLink, phase):
+    def __init__(self, source: MongoClient, mlink: MLink, phase: Phase, options: dict):
         self.source: MongoClient = source
         self.mlink = mlink
         self.phase = phase
+        self.options = options
 
     def __enter__(self):
-        if self.phase is self.Phase.CLONE:
+        if self.phase is self.Phase.APPLY:
             self.start()
         return self
 
     def __exit__(self, _t, exc, _tb):
-        if not exc:
-            if self.phase is self.Phase.APPLY:
-                self.start()
-            self.finalize()
+        if exc:
+            self.finalize_fast()
+            return
+
+        if self.phase is self.Phase.CLONE:
+            self.start()
+        self.finalize()
 
     def start(self):
         status = self.mlink.status()
@@ -62,9 +67,14 @@ class Runner:
             self.mlink.finalize()
             self.wait_for_state(MLink.State.FINALIZED)
 
-        self.mlink.start({})
+        self.mlink.start(self.options)
         self.wait_for_state(MLink.State.RUNNING)
         return self
+
+    def finalize_fast(self):
+        status = self.mlink.status()
+        if status["state"] == MLink.State.RUNNING:
+            self.mlink.finalize()
 
     def finalize(self):
         status = self.mlink.status()

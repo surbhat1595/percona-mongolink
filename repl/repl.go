@@ -32,9 +32,9 @@ type Replicator struct {
 	src  *mongo.Client
 	dest *mongo.Client
 
-	drop      bool
-	includeNS []string
-	excludeNS []string
+	drop bool
+
+	isSelected FilterFunc
 
 	stopC chan struct{}
 
@@ -77,8 +77,7 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 	}
 
 	r.drop = options.DropBeforeCreate
-	r.includeNS = options.IncludeNamespaces
-	r.excludeNS = options.ExcludeNamespaces
+	r.isSelected = makeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
 
 	r.stopC = make(chan struct{})
 	r.state = RunningState
@@ -111,8 +110,7 @@ func (r *Replicator) do(ctx context.Context) error {
 		Source:      r.src,
 		Destination: r.dest,
 		Drop:        r.drop,
-		IncludeNS:   r.includeNS,
-		ExcludeNS:   r.excludeNS,
+		IsSelected:  r.isSelected,
 	}
 
 	err = cloner.Clone(ctx)
@@ -162,10 +160,9 @@ func (r *Replicator) Status(ctx context.Context) (*Status, error) {
 
 func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive.Timestamp) error {
 	applier := &EventApplier{
-		Client:    r.dest,
-		Drop:      r.drop,
-		IncludeNS: r.includeNS,
-		ExcludeNS: r.excludeNS,
+		Client:     r.dest,
+		Drop:       r.drop,
+		IsSelected: r.isSelected,
 	}
 	opts := options.ChangeStream().
 		SetStartAtOperationTime(&startAt).
@@ -202,6 +199,11 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 					SetShowExpandedEvents(true)
 				// TODO: use include/exclude namespaces in pipeline
 				cur, err = r.src.Watch(ctx, mongo.Pipeline{}, opts)
+			}
+			if mongo.IsDuplicateKeyError(err) {
+				r.updateLastAppliedOpTime(optime)
+				log.Error(ctx, err.Error())
+				continue
 			}
 
 			if err != nil {

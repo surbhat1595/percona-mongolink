@@ -146,8 +146,8 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		DropBeforeCreate: true,
 		// TODO: uncomment when tests will be added
 		// DropBeforeCreate: params.DropBeforeCreate,
-		// IncludeNamespaces: params.IncludeNamespaces,
-		// ExcludeNamespaces: params.ExcludeNamespaces,
+		IncludeNamespaces: params.IncludeNamespaces,
+		ExcludeNamespaces: params.ExcludeNamespaces,
 	}
 	err = s.repl.Start(ctx, options)
 	if err != nil {
@@ -223,8 +223,8 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 type startRequest struct {
 	// TODO: uncomment when tests will be added
 	// DropBeforeCreate bool `json:"dropBeforeCreateCollection"`
-	// IncludeNamespaces []string `json:"includeNamespaces,omitempty"`
-	// ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
+	IncludeNamespaces []string `json:"includeNamespaces,omitempty"`
+	ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
 }
 
 type startReponse struct {
