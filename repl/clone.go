@@ -24,6 +24,10 @@ type collSpec struct {
 	indexes []IndexSpecification
 }
 
+func (s *collSpec) isClustered() bool {
+	return s.spec.IDIndex == nil
+}
+
 type IndexSpecification struct {
 	Name               string   `bson:"name"`
 	Namespace          string   `bson:"ns"`
@@ -36,6 +40,10 @@ type IndexSpecification struct {
 	Hidden             *bool    `bson:"hidden,omitempty"`
 
 	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
+}
+
+func (s *IndexSpecification) isClustered() bool {
+	return s.Clustered != nil && *s.Clustered
 }
 
 func (s *collSpec) ns() string {
@@ -192,7 +200,9 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
 			for _, index := range spec.indexes {
-				if index.Name == spec.spec.IDIndex.Name {
+				if spec.isClustered() && index.isClustered() {
+					continue
+				} else if spec.spec.IDIndex.Name == index.Name {
 					continue
 				}
 
