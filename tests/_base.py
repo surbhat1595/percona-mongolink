@@ -1,43 +1,70 @@
 # pylint: disable=missing-docstring,redefined-outer-name
 import hashlib
-import os
-import time
-from enum import StrEnum
+from typing import List
 
 import bson
 import pytest
-import requests
 from pymongo import MongoClient
 from pymongo.collection import Collection
 
+from mlink import MLink, Runner
 
-@pytest.mark.usefixtures("cls_source", "cls_target")
+
+@pytest.mark.usefixtures("cls_source", "cls_target", "cls__mlink")
 class BaseTesting:
     source: MongoClient
     target: MongoClient
+    _mlink: MLink
 
-    def perform(self):
-        return MongoLinkRunner(self)
-
-    @classmethod
-    def compare_coll_options(cls, coll_name):
-        src_coll_options = cls.source.test[coll_name].options()
-        dst_coll_options = cls.target.test[coll_name].options()
-        assert src_coll_options == dst_coll_options
+    def perform(self, phase: Runner.Phase):
+        return Runner(self.source, self._mlink, phase)
 
     @classmethod
-    def compare_coll_indexes(cls, coll_name):
-        src_coll_indexes = cls.source.test[coll_name].index_information()
-        dst_coll_indexes = cls.target.test[coll_name].index_information()
-        assert src_coll_indexes == dst_coll_indexes
+    def compare_all(cls):
+        src_dbs = cls.list_databases(cls.source)
+        dst_dbs = cls.list_databases(cls.target)
+        assert src_dbs == dst_dbs
+
+        for db in src_dbs:
+            src_colls = cls.list_namespaces(cls.source, db)
+            dst_colls = cls.list_namespaces(cls.target, db)
+            assert src_colls == dst_colls
+
+            for coll in src_colls:
+                cls.compare_namespace(db, coll)
+
+    @staticmethod
+    def list_databases(client: MongoClient):
+        rv = set()
+        for name in client.list_database_names():
+            if name not in ("local", "admin", "config"):
+                rv.add(name)
+        return rv
+
+    @staticmethod
+    def list_namespaces(client: MongoClient, db: str):
+        rv = set()
+        for name in client[db].list_collection_names():
+            if not name.startswith("system."):
+                rv.add(name)
+        return rv
 
     @classmethod
-    def compare_coll_content(cls, coll_name):
-        src_docs, src_hash = cls._coll_content(cls.source.test[coll_name])
-        dst_docs, dst_hash = cls._coll_content(cls.target.test[coll_name])
-        assert len(src_docs) == len(dst_docs)
-        assert src_docs == dst_docs
-        assert src_hash == dst_hash
+    def compare_namespace(cls, db: str, coll: str):
+        src_options = cls.source[db][coll].options()
+        dst_options = cls.target[db][coll].options()
+        assert src_options == dst_options, f"{src_options=} != {dst_options=}"
+
+        if "viewOn" not in src_options:
+            src_indexes = cls.source[db][coll].index_information()
+            dst_indexes = cls.target[db][coll].index_information()
+            assert src_indexes == dst_indexes, f"{src_indexes=} != {dst_indexes=}"
+
+        src_docs, src_hash = cls._coll_content(cls.source[db][coll])
+        dst_docs, dst_hash = cls._coll_content(cls.target[db][coll])
+        assert len(src_docs) == len(dst_docs), f"{src_docs=} != {dst_docs=}"
+        assert src_docs == dst_docs, f"{src_docs=} != {dst_docs=}"
+        assert src_hash == dst_hash, f"{src_hash=} != {dst_hash=}"
 
     @staticmethod
     def _coll_content(coll: Collection):
@@ -47,119 +74,22 @@ class BaseTesting:
             docs.extend(bson.decode_all(data))
         return docs, md5.hexdigest()
 
-    def ensure_no_collection(self, coll_name):
-        self.source.test.drop_collection(coll_name)
-        self.target.test.drop_collection(coll_name)
+    def drop_database(self, db: str):
+        self.source.drop_database(db)
+        self.target.drop_database(db)
 
-    def ensure_empty_collection(self, coll_name):
-        # todo: ensure the same collection options
-        self.ensure_no_collection(coll_name)
-        self.source.test.create_collection(coll_name)
-        self.target.test.create_collection(coll_name)
+    def create_collection(self, db: str, coll: str, **kwargs):
+        self.source[db].create_collection(coll, **kwargs)
+        self.target[db].create_collection(coll, **kwargs)
 
-    def ensure_no_indexes(self, coll_name):
-        self.source.test[coll_name].drop_indexes()
-        self.target.test[coll_name].drop_indexes()
+    def create_index(self, db: str, coll: str, keys, **kwargs):
+        self.source[db][coll].create_index(keys, **kwargs)
+        self.source[db][coll].create_index(keys, **kwargs)
 
-    def create_index(self, coll_name, keys, **kwargs):
-        self.source.test[coll_name].create_index(keys, **kwargs)
-        self.source.test[coll_name].create_index(keys, **kwargs)
+    def create_view(self, db: str, view_name: str, source: str, pipeline: List[dict]):
+        self.source[db].create_collection(view_name, viewOn=source, pipeline=pipeline)
+        self.target[db].create_collection(view_name, viewOn=source, pipeline=pipeline)
 
-    def ensure_view(self, view_name, source, pipeline):
-        # todo: ensure the same view options
-        self.ensure_no_collection(view_name)
-        self.source.test.create_collection(view_name, viewOn=source, pipeline=pipeline)
-        self.target.test.create_collection(view_name, viewOn=source, pipeline=pipeline)
-
-    def insert_documents(self, coll_name, documents):
-        self.source.test[coll_name].insert_many(documents)
-        self.target.test[coll_name].insert_many(documents)
-
-    def drop_all_collections(self):
-        for coll_name in self.source.test.list_collection_names():
-            if not coll_name.startswith("system."):
-                self.ensure_no_collection(coll_name)
-        for coll_name in self.target.test.list_collection_names():
-            if not coll_name.startswith("system."):
-                self.ensure_no_collection(coll_name)
-
-    def drop_database(self):
-        self.source.drop_database("test")
-        self.target.drop_database("test")
-
-
-class MongoLinkRunner:
-    def __init__(self, t: BaseTesting):
-        self.source: MongoClient = t.source
-        self.mlink = MongoLink(os.environ["TEST_MLINK_URI"])
-
-    def __enter__(self):
-        status = self.mlink.status()
-        if status["state"] == MongoLink.State.FINALIZING:
-            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
-        elif status["state"] == MongoLink.State.RUNNING:
-            self.mlink.finalize()
-            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
-
-        self.mlink.start()
-        self.mlink.wait_for_state(MongoLink.State.RUNNING)
-        return self
-
-    def __exit__(self, _t, exc, _tb):
-        if exc:
-            return
-
-        status = self.mlink.status()
-        if status["state"] == MongoLink.State.FINALIZING:
-            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
-        elif status["state"] == MongoLink.State.RUNNING:
-            optime = self.source.server_info()["operationTime"]
-            self.mlink.wait_for_optime(optime)
-            self.mlink.finalize()
-            self.mlink.wait_for_state(MongoLink.State.FINALIZED)
-
-
-class MongoLink:
-    class State(StrEnum):
-        IDLE = "idle"
-        RUNNING = "running"
-        FINALIZING = "finalizing"
-        FINALIZED = "finalized"
-
-    def __init__(self, uri):
-        self.uri = uri
-
-    def status(self, **kwargs):
-        res = requests.get(f"{self.uri}/status", timeout=kwargs.get("timeout", 5))
-        res.raise_for_status()
-        return res.json()
-
-    def start(self, **kwargs):
-        res = requests.post(f"{self.uri}/start", json={}, timeout=kwargs.get("timeout", 5))
-        res.raise_for_status()
-        return res.json()
-
-    def finalize(self, **kwargs):
-        res = requests.post(f"{self.uri}/finalize", timeout=kwargs.get("timeout", 5))
-        res.raise_for_status()
-        return res.json()
-
-    def wait_for_state(self, state):
-        status = self.status()
-        while status["state"] != state:
-            time.sleep(0.2)
-            status = self.status()
-
-    def wait_for_optime(self, ts: bson.Timestamp):
-        status = self.status()
-        assert status["state"] == MongoLink.State.RUNNING
-
-        for _ in range(10):  # ~2 secs timeout
-            applied_optime: str = status.get("lastAppliedOpTime")
-            if applied_optime:
-                t_s, i_s = applied_optime.split(".")
-                if ts <= bson.Timestamp(int(t_s), int(i_s)):
-                    break
-
-            time.sleep(0.2)
-            status = self.status()
+    def insert_documents(self, db: str, coll: str, documents: List[dict]):
+        self.source[db][coll].insert_many(documents)
+        self.target[db][coll].insert_many(documents)
