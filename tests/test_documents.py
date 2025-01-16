@@ -1,4 +1,5 @@
 # pylint: disable=missing-docstring,redefined-outer-name
+import pymongo
 import pytest
 from _base import BaseTesting
 
@@ -194,4 +195,27 @@ class TestCRUDOperation(BaseTesting):
                     upsert=True,
                 )
 
+        self.compare_all()
+
+    def test_bulk_write(self, phase):
+        self.drop_database("db_1")
+
+        with self.perform(phase):
+            ops = [
+                pymongo.InsertOne({"i": 1}),
+                pymongo.InsertOne({"i": 2}),
+                pymongo.InsertOne({"i": 3}),
+                pymongo.InsertOne({"i": 4}),
+                pymongo.UpdateOne({"i": 1}, {"$set": {"i": "1"}}),
+                pymongo.DeleteOne({"i": 2}),
+                pymongo.ReplaceOne({"i": 4}, {"k": "4"}),
+            ]
+            self.source["db_1"]["coll_1"].bulk_write(ops, ordered=True)
+
+        coll_1 = []
+        for doc in self.source["db_1"]["coll_1"].find():
+            del doc["_id"]
+            coll_1.append(doc)
+
+        assert coll_1 == [{"i": "1"}, {"i": 3}, {"k": "4"}]
         self.compare_all()
