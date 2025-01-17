@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
@@ -20,27 +21,33 @@ import (
 )
 
 func main() {
-	slog.SetLogLoggerLevel(slog.LevelDebug)
-
-	ctx := context.Background()
-
 	srvOpts := serverOptions{}
+	var logLevelFlag string
+	var logNoColor bool
 	flag.StringVar(&srvOpts.Port, "port", "2242", "port")
 	flag.StringVar(&srvOpts.SourceURI, "src", "", "MongoDB connection string")
 	flag.StringVar(&srvOpts.DestURI, "dest", "", "MongoDB connection string")
+	flag.StringVar(&logLevelFlag, "log-level", "info", "log level")
+	flag.BoolVar(&logNoColor, "no-color", false, "disable log color")
 	flag.Parse()
+
+	logLevel, err := zerolog.ParseLevel(logLevelFlag)
+	if err != nil {
+		log.New(0, true).Fatal().Timestamp().Err(err).Msg("parse log level")
+	}
+
+	l := log.New(logLevel, logNoColor)
+	log.SetFallbackLogger(l)
+	ctx := l.WithContext(context.Background())
 
 	addr, err := buildServerAddr(srvOpts.Port)
 	if err != nil {
-
-		log.Error(ctx, "build server address", log.Err(err))
-		os.Exit(1)
+		l.Fatal().Timestamp().Err(err).Msg("build server address")
 	}
 
 	srv, err := newServer(ctx, srvOpts)
 	if err != nil {
-		log.Error(ctx, "server", log.Err(err))
-		os.Exit(1)
+		l.Fatal().Timestamp().Err(err).Msg("new server")
 	}
 
 	httpServer := http.Server{
@@ -51,15 +58,14 @@ func main() {
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 
-	log.Info(ctx, fmt.Sprintf("starting server at %s", addr))
+	l.Info().Timestamp().Msg("starting server at http://" + addr)
 	err = httpServer.ListenAndServe()
 	if err != nil {
-		log.Error(ctx, "server", log.Err(err))
-		os.Exit(1)
+		l.Fatal().Timestamp().Err(err).Msg("listen")
 	}
 
-	if err1 := srv.Close(ctx); err1 != nil {
-		log.Error(ctx, "close server", log.Err(err1))
+	if err := srv.Close(ctx); err != nil {
+		l.Fatal().Timestamp().Err(err).Msg("close server")
 	}
 }
 
@@ -67,6 +73,11 @@ type serverOptions struct {
 	Port      string
 	SourceURI string
 	DestURI   string
+}
+
+type logOptions struct {
+	Level string
+	JSON  bool
 }
 
 var errUnsupportedPortRange = errors.New("port value is outside supported range [1024 - 65535]")
@@ -120,23 +131,34 @@ func (s *server) Close(ctx context.Context) error {
 
 func (s *server) Handler() http.Handler {
 	mux := http.NewServeMux()
+
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/finalize", s.handleFinalize)
 	mux.HandleFunc("/status", s.handleStatus)
-	return mux
+
+	logAccess := hlog.AccessHandler(
+		func(r *http.Request, status, size int, duration time.Duration) {
+			hlog.FromRequest(r).Info().
+				Timestamp().
+				Str("method", r.Method).
+				Stringer("url", r.URL).
+				Int("status", status).
+				Msg("")
+		})
+
+	return logAccess(mux)
 }
 
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log.Info(ctx, "/start")
+	ctx := log.WithAttrs(r.Context(), log.Scope("/start"))
 
 	var params startRequest
 	err := json.NewDecoder(r.Body).Decode(&params)
 	if err != nil {
-		log.Error(ctx, "decode request body", log.Err(err))
+		log.Error(ctx, err, "decode request body")
 		err := json.NewEncoder(w).Encode(startReponse{Error: err.Error()})
 		if err != nil {
-			log.Error(ctx, "write status", log.Err(err))
+			log.Error(ctx, err, "write status")
 			internalServerError(w)
 		}
 		return
@@ -151,10 +173,10 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	err = s.repl.Start(ctx, options)
 	if err != nil {
-		log.Error(ctx, "start replication", log.Err(err))
+		log.Error(ctx, err, "start replication")
 		err := json.NewEncoder(w).Encode(startReponse{Error: err.Error()})
 		if err != nil {
-			log.Error(ctx, "write status", log.Err(err))
+			log.Error(ctx, err, "write status")
 			internalServerError(w)
 		}
 		return
@@ -162,21 +184,20 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 
 	err = json.NewEncoder(w).Encode(startReponse{Ok: true})
 	if err != nil {
-		log.Error(ctx, "write status", log.Err(err))
+		log.Error(ctx, err, "write status")
 		internalServerError(w)
 	}
 }
 
 func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log.Info(ctx, "/finalize")
+	ctx := log.WithAttrs(r.Context(), log.Scope("/finalize"))
 
 	err := s.repl.Finalize(ctx)
 	if err != nil {
-		log.Error(ctx, "finalize replication", log.Err(err))
+		log.Error(ctx, err, "finalize replication")
 		err := json.NewEncoder(w).Encode(finalizeReponse{Error: err.Error()})
 		if err != nil {
-			log.Error(ctx, "write status", log.Err(err))
+			log.Error(ctx, err, "write status")
 			internalServerError(w)
 		}
 		return
@@ -184,21 +205,20 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 
 	err = json.NewEncoder(w).Encode(finalizeReponse{Ok: true})
 	if err != nil {
-		log.Error(ctx, "write status", log.Err(err))
+		log.Error(ctx, err, "write status")
 		internalServerError(w)
 	}
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log.Info(ctx, "/status")
+	ctx := log.WithAttrs(r.Context(), log.Scope("/status"))
 
 	replStatus, err := s.repl.Status(ctx)
 	if err != nil {
-		log.Error(ctx, "replication status", log.Err(err))
+		log.Error(ctx, err, "replication status")
 		err := json.NewEncoder(w).Encode(statusResponse{Error: err.Error()})
 		if err != nil {
-			log.Error(ctx, "write status", log.Err(err))
+			log.Error(ctx, err, "write status")
 			internalServerError(w)
 		}
 		return
@@ -215,7 +235,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	err = json.NewEncoder(w).Encode(res)
 	if err != nil {
-		log.Error(ctx, "write status", log.Err(err))
+		log.Error(ctx, err, "write status")
 		internalServerError(w)
 	}
 }

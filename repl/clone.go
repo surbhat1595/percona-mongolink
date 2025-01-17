@@ -2,7 +2,6 @@ package repl
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -74,6 +73,7 @@ func (c *dataCloner) StartedAt() primitive.Timestamp {
 }
 
 func (c *dataCloner) init(ctx context.Context) error {
+	ctx = log.WithAttrs(ctx, log.Scope("dataCloner.init"))
 	var err error
 	c.startedAt, err = topo.ClusterTime(ctx, c.Source)
 	if err != nil {
@@ -112,10 +112,8 @@ func (c *dataCloner) init(ctx context.Context) error {
 					continue
 				}
 				if !c.IsSelected(db.Name, coll.Name) {
-					log.Debug(ctx, fmt.Sprintf("not selected %s.%s", db.Name, coll.Name))
+					log.Tracef(ctx, "not selected %s.%s", db.Name, coll.Name)
 					continue
-				} else {
-					log.Debug(ctx, fmt.Sprintf("selected %s.%s", db.Name, coll.Name))
 				}
 
 				grp.Go(func() error {
@@ -164,6 +162,7 @@ func (c *dataCloner) init(ctx context.Context) error {
 }
 
 func (c *dataCloner) Clone(ctx context.Context) error {
+	ctx = log.WithAttrs(ctx, log.Scope("dataCloner.Clone"))
 	err := c.init(ctx)
 	if err != nil {
 		return errors.Wrap(err, "init")
@@ -175,7 +174,9 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
 			errGrp.Go(func() error {
-				log.Debug(ctx, fmt.Sprintf("processing %s.%s", spec.dbName, spec.spec.Name))
+				ctx := log.WithAttrs(grpCtx, log.NS(spec.dbName, spec.spec.Name))
+				log.Tracef(ctx, "")
+
 				var err error
 				switch spec.spec.Type {
 				case "collection":
@@ -183,7 +184,7 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 				case "view":
 					err = c.cloneView(ctx, spec)
 				case "timeseries":
-					log.Warn(ctx, "timeseries is not supported. skip", "ns", spec.ns())
+					log.Warn(ctx, "timeseries is not supported. skip")
 				}
 				if err != nil {
 					return errors.Wrap(err, "clone "+spec.ns())
@@ -194,7 +195,7 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 		}
 	}
 
-	return errors.Wrap(errGrp.Wait(), "wait")
+	return errGrp.Wait() //nolint:wrapcheck
 }
 
 func (c *dataCloner) BuildIndexes(ctx context.Context) error {
@@ -236,7 +237,7 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 }
 
 func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error {
-	log.Debug(ctx, "cloning collection", "ns", spec.ns())
+	log.Debug(ctx, "cloning collection")
 
 	if c.Drop {
 		err := c.Destination.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
@@ -276,12 +277,12 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 		return errors.Wrap(err, "cloning failed "+spec.ns())
 	}
 
-	log.Info(ctx, "cloned collection", "ns", spec.ns())
+	log.Info(ctx, "cloned collection")
 	return nil
 }
 
 func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
-	log.Debug(ctx, "cloning view", "ns", spec.ns())
+	log.Debug(ctx, "cloning view")
 
 	if c.Drop {
 		err := c.Destination.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
@@ -301,6 +302,6 @@ func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
 		return errors.Wrap(err, "create view")
 	}
 
-	log.Info(ctx, "cloned view", "ns", spec.ns())
+	log.Info(ctx, "cloned view")
 	return nil
 }

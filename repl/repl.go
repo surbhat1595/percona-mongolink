@@ -2,7 +2,6 @@ package repl
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -65,6 +64,8 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	ctx = log.WithAttrs(ctx, log.Scope("repl"))
+
 	if options == nil {
 		options = &StartOptions{}
 	}
@@ -84,9 +85,10 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 	r.lastAppliedOpTime = primitive.Timestamp{}
 
 	go func() {
-		err := r.do(context.TODO()) //nolint:contextcheck
+		ctx := log.CopyContext(ctx, context.Background())
+		err := r.run(ctx)
 		if err != nil {
-			log.Error(ctx, "run", log.Err(err))
+			log.Error(ctx, err, "run")
 		}
 
 		log.Info(ctx, "finalized")
@@ -98,7 +100,8 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 	return nil
 }
 
-func (r *Replicator) do(ctx context.Context) error {
+func (r *Replicator) run(ctx context.Context) error {
+	ctx = log.WithAttrs(ctx, log.Scope("repl.run"))
 	log.Info(ctx, "starting data cloning")
 
 	startedAt, err := topo.ClusterTime(ctx, r.src)
@@ -123,7 +126,7 @@ func (r *Replicator) do(ctx context.Context) error {
 		return errors.Wrap(err, "build indexes")
 	}
 
-	log.Info(ctx, fmt.Sprintf("starting change application at %d.%d", startedAt.T, startedAt.I))
+	log.Infof(ctx, "starting change application at %d.%d", startedAt.T, startedAt.I)
 	err = r.runChangeApplication(ctx, startedAt)
 	if err != nil {
 		return errors.Wrap(err, "run change application")
@@ -159,7 +162,9 @@ func (r *Replicator) Status(ctx context.Context) (*Status, error) {
 }
 
 func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive.Timestamp) error {
-	applier := &EventApplier{
+	ctx = log.WithAttrs(ctx, log.Scope("repl.apply"))
+
+	applier := &eventApplier{
 		Client:     r.dest,
 		Drop:       r.drop,
 		IsSelected: r.isSelected,
@@ -202,7 +207,7 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 			}
 			if mongo.IsDuplicateKeyError(err) {
 				r.updateLastAppliedOpTime(optime)
-				log.Error(ctx, err.Error())
+				log.Error(ctx, err, "DuplicateKeyError")
 				continue
 			}
 
@@ -216,7 +221,7 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 			return errors.Wrap(err, "cursor")
 		}
 
-		log.Debug(ctx, "no documents yet")
+		log.Trace(ctx, "no events")
 	}
 }
 

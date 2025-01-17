@@ -76,7 +76,7 @@ func createCollection(
 	}
 
 	if opts.Collation != nil {
-		cmd = append(cmd, bson.E{"collation", opts.Collation.ToDocument()})
+		cmd = append(cmd, bson.E{"collation", opts.Collation.ToDocument()}) //nolint:staticcheck
 	}
 
 	res := m.Database(dbName).RunCommand(ctx, cmd)

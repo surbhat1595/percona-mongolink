@@ -2,7 +2,6 @@ package repl
 
 import (
 	"context"
-	"fmt"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -37,7 +36,7 @@ func IsInvalidatedError(err error) bool {
 	return errors.As(err, &InvalidatedError{})
 }
 
-type EventApplier struct {
+type eventApplier struct {
 	Client *mongo.Client
 
 	Drop bool
@@ -45,26 +44,25 @@ type EventApplier struct {
 	IsSelected FilterFunc
 }
 
-func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Timestamp, error) {
+func (h *eventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Timestamp, error) {
 	var baseEvent BaseEvent
 	err := bson.Unmarshal(data, &baseEvent)
 	if err != nil {
 		return primitive.Timestamp{}, errors.Wrap(err, "failed to decode base event")
 	}
 
-	fullNS := baseEvent.Namespace.String()
+	ctx = log.WithAttrs(ctx,
+		log.Scope("eventApplier.apply"),
+		log.Operation(string(baseEvent.OperationType)),
+		log.OpTime(baseEvent.ClusterTime),
+		log.NS(baseEvent.Namespace.Database, baseEvent.Namespace.Collection))
+
 	if !h.IsSelected(baseEvent.Namespace.Database, baseEvent.Namespace.Collection) {
-		log.Debug(ctx, "apply: not selected", "ns", fullNS)
+		log.Debug(ctx, "apply: not selected")
 		return baseEvent.ClusterTime, nil
-	} else {
-		log.Debug(ctx, "apply: selected", "ns", fullNS)
 	}
 
-	log.Debug(ctx, fmt.Sprintf("handling event: %s (ts: %d.%d, ns: %s)",
-		baseEvent.OperationType,
-		baseEvent.ClusterTime.T,
-		baseEvent.ClusterTime.I,
-		fullNS))
+	log.Debug(ctx, "apply event")
 
 	switch baseEvent.OperationType {
 	case Create:
@@ -112,14 +110,14 @@ func (h *EventApplier) Apply(ctx context.Context, data bson.Raw) (primitive.Time
 	return baseEvent.ClusterTime, errors.Wrap(err, string(baseEvent.OperationType))
 }
 
-func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
 	}
 
 	if event.IsTimeseries() {
-		log.Warn(ctx, "timeseries is not supported. skip", "ns", event.Namespace.String())
+		log.Warn(ctx, "timeseries is not supported. skip")
 		return nil
 	}
 
@@ -150,7 +148,7 @@ func (h *EventApplier) handleCreate(ctx context.Context, data bson.Raw) error {
 	)
 }
 
-func (h *EventApplier) handleDrop(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleDrop(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -159,7 +157,7 @@ func (h *EventApplier) handleDrop(ctx context.Context, data bson.Raw) error {
 	return dropCollection(ctx, h.Client, event.Namespace.Database, event.Namespace.Collection)
 }
 
-func (h *EventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropDatabaseEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -169,7 +167,7 @@ func (h *EventApplier) handleDropDatabase(ctx context.Context, data bson.Raw) er
 	return err //nolint:wrapcheck
 }
 
-func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[CreateIndexesEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -201,7 +199,7 @@ func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 	return err //nolint:wrapcheck
 }
 
-func (h *EventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleDropIndexes(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DropIndexesEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -230,7 +228,7 @@ func isIndexNotFound(err error) bool {
 	return false
 }
 
-func (h *EventApplier) handleInsert(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleInsert(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[InsertEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -244,7 +242,7 @@ func (h *EventApplier) handleInsert(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
-func (h *EventApplier) handleDelete(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleDelete(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[DeleteEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -256,7 +254,7 @@ func (h *EventApplier) handleDelete(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
-func (h *EventApplier) handleUpdate(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleUpdate(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[UpdateEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
@@ -281,7 +279,7 @@ func (h *EventApplier) handleUpdate(ctx context.Context, data bson.Raw) error {
 	return err //nolint:wrapcheck
 }
 
-func (h *EventApplier) handleReplace(ctx context.Context, data bson.Raw) error {
+func (h *eventApplier) handleReplace(ctx context.Context, data bson.Raw) error {
 	event, err := parseEvent[ReplaceEvent](data)
 	if err != nil {
 		return errors.Wrap(err, "parse")
