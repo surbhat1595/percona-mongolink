@@ -16,6 +16,15 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
+    def test_create_with_collation(self, phase):
+        self.drop_database("db_1")
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"i": 1}, collation={"locale": "en_US"})
+
+        self.compare_all()
+
     def test_create_unique(self, phase):
         self.drop_database("db_1")
         self.create_collection("db_1", "coll_1")

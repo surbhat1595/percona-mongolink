@@ -6,6 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type OperationType string
@@ -252,6 +253,8 @@ type createEventOptions struct {
 
 	ViewOn   string `bson:"viewOn"`
 	Pipeline []any  `bson:"pipeline"`
+
+	Collation *options.Collation `bson:"collation,omitempty"`
 }
 
 // DropEvent occurs when a collection is dropped from a database.

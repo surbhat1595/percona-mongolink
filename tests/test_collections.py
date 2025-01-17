@@ -25,6 +25,14 @@ class TestCollection(BaseTesting):
 
         self.compare_all()
 
+    def test_create_with_collation(self, phase):
+        self.drop_all_database()
+
+        with self.perform(phase):
+            self.source["db_1"].create_collection("coll_1", collation={"locale": "en_US"})
+
+        self.compare_all()
+
     @pytest.mark.xfail
     def test_create_equal_uuid(self, phase):
         self.drop_database("db_1")
@@ -70,6 +78,20 @@ class TestCollection(BaseTesting):
                 "view_1",
                 viewOn="coll_1",
                 pipeline=[{"$match": {"i": {"$gte": 0}}}],
+            )
+
+        self.compare_all()
+
+    def test_create_view_with_collation(self, phase):
+        self.drop_database("db_1")
+        self.insert_documents("db_1", "coll_1", [{"i": i} for i in range(-3, 3)])
+
+        with self.perform(phase):
+            self.source["db_1"].create_collection(
+                "view_1",
+                viewOn="coll_1",
+                pipeline=[{"$match": {"i": {"$gte": 0}}}],
+                collation={"locale": "en_US"},
             )
 
         self.compare_all()

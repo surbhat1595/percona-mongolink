@@ -40,6 +40,8 @@ type IndexSpecification struct {
 	Hidden             *bool    `bson:"hidden,omitempty"`
 
 	PartialFilterExpression any `bson:"partialFilterExpression,omitempty"`
+
+	Collation *options.Collation `bson:"collation,omitempty"`
 }
 
 func (s *IndexSpecification) isClustered() bool {
@@ -215,6 +217,8 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 						Hidden:  index.Hidden,
 
 						PartialFilterExpression: index.PartialFilterExpression,
+
+						Collation: index.Collation,
 					},
 				}
 

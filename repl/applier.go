@@ -185,6 +185,8 @@ func (h *EventApplier) handleCreateIndexes(ctx context.Context, data bson.Raw) e
 			Hidden:  index.Hidden,
 
 			PartialFilterExpression: index.PartialFilterExpression,
+
+			Collation: index.Collation,
 		}
 
 		indexes = append(indexes, mongo.IndexModel{

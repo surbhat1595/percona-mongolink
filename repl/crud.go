@@ -6,6 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/percona-lab/percona-mongolink/errors"
 )
@@ -30,19 +31,23 @@ func createView(
 	ctx context.Context,
 	m *mongo.Client,
 	dbName string,
-	collName string,
-	options *createEventOptions,
+	viewName string,
+	opts *createEventOptions,
 ) error {
-	if strings.HasPrefix(options.ViewOn, "system.buckets.") {
+	if strings.HasPrefix(opts.ViewOn, "system.buckets.") {
 		return TimeseriesError{
 			NS: Namespace{
 				Database:   dbName,
-				Collection: collName,
+				Collection: viewName,
 			},
 		}
 	}
 
-	err := m.Database(dbName).CreateView(ctx, collName, options.ViewOn, options.Pipeline)
+	err := m.Database(dbName).CreateView(ctx,
+		viewName,
+		opts.ViewOn,
+		opts.Pipeline,
+		options.CreateView().SetCollation(opts.Collation))
 	return errors.Wrap(err, "create view")
 }
 
@@ -51,26 +56,29 @@ func createCollection(
 	m *mongo.Client,
 	dbName string,
 	collName string,
-	options *createEventOptions,
+	opts *createEventOptions,
 ) error {
-	var opts bson.D
-	if options.ClusteredIndex != nil {
-		opts = append(opts, bson.E{"clusteredIndex", options.ClusteredIndex})
+	cmd := bson.D{{"create", collName}}
+	if opts.ClusteredIndex != nil {
+		cmd = append(cmd, bson.E{"clusteredIndex", opts.ClusteredIndex})
 	} else {
-		opts = append(opts, bson.E{"idIndex", options.IDIndex})
+		cmd = append(cmd, bson.E{"idIndex", opts.IDIndex})
 	}
 
-	if options.Capped {
-		opts = append(opts, bson.E{"capped", options.Capped})
-		if options.Size != 0 {
-			opts = append(opts, bson.E{"size", options.Size})
+	if opts.Capped {
+		cmd = append(cmd, bson.E{"capped", opts.Capped})
+		if opts.Size != 0 {
+			cmd = append(cmd, bson.E{"size", opts.Size})
 		}
-		if options.Max != 0 {
-			opts = append(opts, bson.E{"max", options.Max})
+		if opts.Max != 0 {
+			cmd = append(cmd, bson.E{"max", opts.Max})
 		}
 	}
 
-	cmd := append(bson.D{{"create", collName}}, opts...)
+	if opts.Collation != nil {
+		cmd = append(cmd, bson.E{"collation", opts.Collation.ToDocument()})
+	}
+
 	res := m.Database(dbName).RunCommand(ctx, cmd)
 	return errors.Wrap(res.Err(), "create collection")
 }
