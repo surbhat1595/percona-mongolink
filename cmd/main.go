@@ -40,6 +40,11 @@ func main() {
 	log.SetFallbackLogger(l)
 	ctx := l.WithContext(context.Background())
 
+	err = srvOpts.verify()
+	if err != nil {
+		l.Fatal().Timestamp().Err(err).Msg("")
+	}
+
 	addr, err := buildServerAddr(srvOpts.Port)
 	if err != nil {
 		l.Fatal().Timestamp().Err(err).Msg("build server address")
@@ -75,9 +80,18 @@ type serverOptions struct {
 	DestURI   string
 }
 
-type logOptions struct {
-	Level string
-	JSON  bool
+func (o serverOptions) verify() error {
+	switch {
+	case o.SourceURI == "" && o.DestURI == "":
+		return errors.New("source uri and destination uri are empty")
+	case o.SourceURI == "":
+		return errors.New("source uri is empty")
+	case o.DestURI == "":
+		return errors.New("destination uri is empty")
+	case o.SourceURI == o.DestURI:
+		return errors.New("source uri and destination uri are identical")
+	}
+	return nil
 }
 
 var errUnsupportedPortRange = errors.New("port value is outside supported range [1024 - 65535]")
