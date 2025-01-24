@@ -82,6 +82,16 @@ class TestIndexes(BaseTesting):
 
         self.compare_all()
 
+    def test_create_geospatial(self, phase):
+        self.drop_database("db_1")
+        self.create_collection("db_1", "coll_1")
+
+        with self.perform(phase):
+            self.source["db_1"]["coll_1"].create_index({"loc1": "2d"})
+            self.source["db_1"]["coll_1"].create_index({"loc2": "2dsphere"})
+
+        self.compare_all()
+
     def test_drop_cloned(self, phase):
         self.drop_database("db_1")
         self.create_collection("db_1", "coll_1")
