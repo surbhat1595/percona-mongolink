@@ -12,15 +12,21 @@
     "editor.insertSpaces": false,
     "editor.tabSize": 4
   },
+  "black-formatter.args": [
+    "-l 100"
+  ],
+  "editor.rulers": [
+    100
+  ],
   "files.encoding": "utf8",
   "files.eol": "\n",
   "files.insertFinalNewline": true,
   "files.trimFinalNewlines": true,
   "files.trimTrailingWhitespace": true,
-  "go.formatTool": "gofumpt",
   "go.formatFlags": [
     "-extra"
   ],
+  "go.formatTool": "gofumpt",
   "go.lintTool": "golangci-lint",
   "go.useLanguageServer": true,
   "gopls": {
@@ -32,13 +38,9 @@
     "formatting.local": "github.com/percona",
     "ui.semanticTokens": true
   },
-  "shellformat.flag": "-bn -ci -s",
   "python.testing.pytestArgs": [
     "tests"
   ],
-  "python.testing.unittestEnabled": false,
   "python.testing.pytestEnabled": true,
-  "black-formatter.args": [
-    "-l 100"
-  ]
+  "python.testing.unittestEnabled": false
 }
