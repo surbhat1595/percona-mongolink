@@ -18,13 +18,8 @@ import (
 )
 
 type collSpec struct {
-	dbName  string
-	spec    *mongo.CollectionSpecification
-	indexes []IndexSpecification
-}
-
-func (s *collSpec) isClustered() bool {
-	return s.spec.IDIndex == nil
+	DB string
+	mongo.CollectionSpecification
 }
 
 type IndexSpecification struct {
@@ -48,18 +43,18 @@ func (s *IndexSpecification) isClustered() bool {
 }
 
 func (s *collSpec) ns() string {
-	return s.dbName + "." + s.spec.Name
+	return s.DB + "." + s.Name
 }
 
 type dataCloner struct {
 	Source *mongo.Client
 	Target *mongo.Client
-	Drop   bool
 
-	IsSelected FilterFunc
+	Drop         bool
+	IsSelected   FilterFunc
+	IndexCatalog *IndexCatalog
 
-	specs map[string][]*collSpec
-
+	specs     map[string][]*collSpec
 	startedAt primitive.Timestamp
 
 	mu sync.Mutex
@@ -85,11 +80,12 @@ func (c *dataCloner) init(ctx context.Context) error {
 		return errors.Wrap(err, "list databases")
 	}
 
+	nsCatalog := make(map[string][]*collSpec)
+
 	mu := sync.Mutex{}
 	grp, grpCtx := errgroup.WithContext(ctx)
 	grp.SetLimit(runtime.NumCPU())
 
-	nsCatalog := make(map[string][]*collSpec)
 	for _, db := range databases.Databases {
 		switch db.Name {
 		case "admin", "config", "local":
@@ -97,54 +93,59 @@ func (c *dataCloner) init(ctx context.Context) error {
 		}
 
 		grp.Go(func() error {
-			colls, err := c.Source.Database(db.Name).
-				ListCollectionSpecifications(grpCtx, bson.D{})
+			colls, err := c.Source.Database(db.Name).ListCollectionSpecifications(grpCtx, bson.D{})
 			if err != nil {
 				return errors.Wrap(err, "list collections")
 			}
 
-			mu.Lock()
-			nsCatalog[db.Name] = make([]*collSpec, 0, len(colls))
-			mu.Unlock()
-
+			dbColls := make([]*collSpec, 0, len(colls))
 			for _, coll := range colls {
 				if strings.HasPrefix(coll.Name, "system.") {
 					continue
 				}
 				if !c.IsSelected(db.Name, coll.Name) {
-					log.Tracef(ctx, "not selected %s.%s", db.Name, coll.Name)
+					log.Trace(log.WithAttrs(ctx, log.NS(db.Name, coll.Name)), "not selected")
 					continue
 				}
 
-				grp.Go(func() error {
-					var indexes []IndexSpecification
+				dbColls = append(dbColls, &collSpec{
+					DB:                      db.Name,
+					CollectionSpecification: *coll,
+				})
 
-					if coll.Type == "collection" {
-						var err error
-						cur, err := c.Source.Database(db.Name).
-							Collection(coll.Name).
-							Indexes().List(grpCtx)
-						if err != nil {
-							return errors.Wrap(err, "list indexes")
-						}
+				if coll.Type != "collection" {
+					continue
+				}
 
-						err = cur.All(grpCtx, &indexes)
-						if err != nil {
-							return errors.Wrap(err, "decode indexes")
+				cur, err := c.Source.Database(db.Name).Collection(coll.Name).Indexes().List(grpCtx)
+				if err != nil {
+					return errors.Wrap(err, "list indexes")
+				}
+
+				var indexes []IndexSpecification
+				err = cur.All(grpCtx, &indexes)
+				if err != nil {
+					return errors.Wrap(err, "decode indexes")
+				}
+
+				if coll.IDIndex == nil {
+					// make sure no TTL is set up for clustered index.
+					// reason: change stream does not provide TTL value for the clustered index.
+					for i := range indexes {
+						if idx := indexes[i]; idx.isClustered() && idx.ExpireAfterSeconds != nil {
+							log.Warn(ctx, "clustered index with time-to-live is not supported. "+
+								"creating clustered index without ttl value")
+							idx.ExpireAfterSeconds = nil
 						}
 					}
+				}
 
-					mu.Lock()
-					nsCatalog[db.Name] = append(nsCatalog[db.Name], &collSpec{
-						dbName:  db.Name,
-						spec:    coll,
-						indexes: indexes,
-					})
-					mu.Unlock()
-					return nil
-				})
+				c.IndexCatalog.CreateIndexes(db.Name, coll.Name, indexes)
 			}
 
+			mu.Lock()
+			nsCatalog[db.Name] = dbColls
+			mu.Unlock()
 			return nil
 		})
 	}
@@ -174,11 +175,11 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
 			errGrp.Go(func() error {
-				ctx := log.WithAttrs(grpCtx, log.NS(spec.dbName, spec.spec.Name))
+				ctx := log.WithAttrs(grpCtx, log.NS(spec.DB, spec.Name))
 				log.Tracef(ctx, "")
 
 				var err error
-				switch spec.spec.Type {
+				switch spec.Type {
 				case "collection":
 					err = c.cloneCollection(grpCtx, spec)
 				case "view":
@@ -201,10 +202,12 @@ func (c *dataCloner) Clone(ctx context.Context) error {
 func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 	for _, dbSpecs := range c.specs {
 		for _, spec := range dbSpecs {
-			for _, index := range spec.indexes {
-				if spec.isClustered() && index.isClustered() {
-					continue
-				} else if spec.spec.IDIndex.Name == index.Name {
+			for index := range c.IndexCatalog.CollectionIndexes(spec.DB, spec.Name) {
+				if spec.IDIndex == nil {
+					if index.isClustered() {
+						continue
+					}
+				} else if spec.IDIndex.Name == index.Name {
 					continue
 				}
 
@@ -223,11 +226,38 @@ func (c *dataCloner) BuildIndexes(ctx context.Context) error {
 					},
 				}
 
-				_, err := c.Target.Database(spec.dbName).
-					Collection(spec.spec.Name).
+				_, err := c.Target.Database(spec.DB).Collection(spec.Name).
 					Indexes().CreateOne(ctx, model)
 				if err != nil {
 					return errors.Wrap(err, "create index: "+index.Name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *dataCloner) FinalizeIndexes(ctx context.Context) error {
+	for _, dbSpecs := range c.specs {
+		for _, spec := range dbSpecs {
+			for index := range c.IndexCatalog.CollectionIndexes(spec.DB, spec.Name) {
+				if index.ExpireAfterSeconds == nil || *index.ExpireAfterSeconds <= 0 {
+					continue
+				}
+				if index.isClustered() {
+					continue // clustered index with ttl is not supported
+				}
+
+				res := c.Target.Database(spec.DB).RunCommand(ctx, bson.D{
+					{"collMod", spec.Name},
+					{"index", bson.D{
+						{"name", index.Name},
+						{"expireAfterSeconds", *index.ExpireAfterSeconds},
+					}},
+				})
+				if err := res.Err(); err != nil {
+					return errors.Wrap(err, "convert index: "+index.Name)
 				}
 			}
 		}
@@ -240,31 +270,31 @@ func (c *dataCloner) cloneCollection(ctx context.Context, spec *collSpec) error 
 	log.Debug(ctx, "cloning collection")
 
 	if c.Drop {
-		err := c.Target.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
+		err := c.Target.Database(spec.DB).Collection(spec.Name).Drop(ctx)
 		if err != nil {
 			return errors.Wrap(err, "drop")
 		}
 	}
 
 	var options createEventOptions
-	err := bson.Unmarshal(spec.spec.Options, &options)
+	err := bson.Unmarshal(spec.Options, &options)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createCollection(ctx, c.Target, spec.dbName, spec.spec.Name, &options)
+	err = createCollection(ctx, c.Target, spec.DB, spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
 
-	cur, err := c.Source.Database(spec.dbName).Collection(spec.spec.Name).
+	cur, err := c.Source.Database(spec.DB).Collection(spec.Name).
 		Find(ctx, bson.D{})
 	if err != nil {
 		return errors.Wrap(err, "find")
 	}
 	defer cur.Close(ctx)
 
-	targetColl := c.Target.Database(spec.dbName).Collection(spec.spec.Name)
+	targetColl := c.Target.Database(spec.DB).Collection(spec.Name)
 	for cur.Next(ctx) {
 		_, err = targetColl.InsertOne(ctx, cur.Current)
 		if err != nil {
@@ -285,19 +315,19 @@ func (c *dataCloner) cloneView(ctx context.Context, spec *collSpec) error {
 	log.Debug(ctx, "cloning view")
 
 	if c.Drop {
-		err := c.Target.Database(spec.dbName).Collection(spec.spec.Name).Drop(ctx)
+		err := c.Target.Database(spec.DB).Collection(spec.Name).Drop(ctx)
 		if err != nil {
 			return errors.Wrap(err, "drop")
 		}
 	}
 
 	var options createEventOptions
-	err := bson.Unmarshal(spec.spec.Options, &options)
+	err := bson.Unmarshal(spec.Options, &options)
 	if err != nil {
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createView(ctx, c.Target, spec.dbName, spec.spec.Name, &options)
+	err = createView(ctx, c.Target, spec.DB, spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create view")
 	}

@@ -31,14 +31,13 @@ type Replicator struct {
 	source *mongo.Client
 	target *mongo.Client
 
-	drop bool
-
+	drop       bool
 	isSelected FilterFunc
 
 	stopC chan struct{}
-
 	state State
 
+	indexCatalog      *IndexCatalog
 	lastAppliedOpTime primitive.Timestamp
 
 	mu sync.Mutex
@@ -100,9 +99,20 @@ func (r *Replicator) Start(ctx context.Context, options *StartOptions) error {
 	return nil
 }
 
+func (r *Replicator) init() {
+	r.indexCatalog = NewIndexCatalog()
+}
+
+func (r *Replicator) deinit() {
+	r.indexCatalog = nil
+}
+
 func (r *Replicator) run(ctx context.Context) error {
 	ctx = log.WithAttrs(ctx, log.Scope("repl.run"))
 	log.Info(ctx, "starting data cloning")
+
+	r.init()
+	defer r.deinit()
 
 	startedAt, err := topo.ClusterTime(ctx, r.source)
 	if err != nil {
@@ -110,10 +120,11 @@ func (r *Replicator) run(ctx context.Context) error {
 	}
 
 	cloner := dataCloner{
-		Source:     r.source,
-		Target:     r.target,
-		Drop:       r.drop,
-		IsSelected: r.isSelected,
+		Source:       r.source,
+		Target:       r.target,
+		Drop:         r.drop,
+		IsSelected:   r.isSelected,
+		IndexCatalog: r.indexCatalog,
 	}
 
 	err = cloner.Clone(ctx)
@@ -126,10 +137,15 @@ func (r *Replicator) run(ctx context.Context) error {
 		return errors.Wrap(err, "build indexes")
 	}
 
-	log.Infof(ctx, "starting change application at %d.%d", startedAt.T, startedAt.I)
-	err = r.runChangeApplication(ctx, startedAt)
+	log.Infof(ctx, "starting change relication since %d.%d", startedAt.T, startedAt.I)
+	err = r.runChangeRelication(ctx, startedAt)
 	if err != nil {
-		return errors.Wrap(err, "run change application")
+		return errors.Wrap(err, "run change replication")
+	}
+
+	err = cloner.FinalizeIndexes(ctx)
+	if err != nil {
+		return errors.Wrap(err, "finalize indexes")
 	}
 
 	return nil
@@ -161,13 +177,14 @@ func (r *Replicator) Status(ctx context.Context) (*Status, error) {
 	return s, nil
 }
 
-func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive.Timestamp) error {
+func (r *Replicator) runChangeRelication(ctx context.Context, startAt primitive.Timestamp) error {
 	ctx = log.WithAttrs(ctx, log.Scope("repl.apply"))
 
 	applier := &eventApplier{
-		Client:     r.target,
-		Drop:       r.drop,
-		IsSelected: r.isSelected,
+		Client:       r.target,
+		Drop:         r.drop,
+		IsSelected:   r.isSelected,
+		IndexCatalog: r.indexCatalog,
 	}
 	opts := options.ChangeStream().
 		SetStartAtOperationTime(&startAt).
@@ -182,9 +199,6 @@ func (r *Replicator) runChangeApplication(ctx context.Context, startAt primitive
 	for {
 		select {
 		case <-r.stopC:
-			r.mu.Lock()
-			r.state = FinalizedState
-			r.mu.Unlock()
 			return nil
 		default:
 		}
