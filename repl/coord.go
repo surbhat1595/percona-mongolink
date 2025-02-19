@@ -15,17 +15,12 @@ import (
 type State string
 
 const (
+	FailedState     = "failed"
 	IdleState       = "idle"
 	RunningState    = "running"
 	FinalizingState = "finalizing"
 	FinalizedState  = "finalized"
 )
-
-type CloneStatus struct {
-	Finished             bool
-	EstimatedTotalBytes  int64
-	EstimatedClonedBytes int64
-}
 
 type Status struct {
 	State             State
@@ -44,13 +39,13 @@ type Coordinator struct {
 	drop     bool
 	nsFilter NSFilter
 
-	repl      *ChangeReplicator
+	state   State
+	catalog *Catalog
+	cloner  *DataCloner
+	repl    *ChangeReplicator
+
 	startedAt primitive.Timestamp
 	clonedAt  primitive.Timestamp
-
-	state State
-
-	cloner *DataCloner
 
 	mu sync.Mutex
 }
@@ -77,7 +72,7 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 
 	ctx = log.WithAttrs(ctx, log.Scope("coord:repl"))
 
-	if c.state != IdleState && c.state != FinalizedState {
+	if c.state != IdleState && c.state != FinalizedState && c.state != FailedState {
 		return errors.New(string(c.state))
 	}
 
@@ -93,11 +88,32 @@ func (c *Coordinator) Start(ctx context.Context, options *StartOptions) error {
 	c.clonedAt = primitive.Timestamp{}
 	c.state = RunningState
 
+	c.catalog = NewCatalog()
+	c.cloner = &DataCloner{
+		Source:   c.source,
+		Target:   c.target,
+		Drop:     c.drop,
+		NSFilter: c.nsFilter,
+		Catalog:  c.catalog,
+	}
+
+	c.repl = &ChangeReplicator{
+		Source:   c.source,
+		Target:   c.target,
+		Drop:     c.drop,
+		NSFilter: c.nsFilter,
+		Catalog:  c.catalog,
+	}
+
 	go func() {
 		ctx := log.CopyContext(ctx, context.Background())
 		err := c.run(ctx)
 		if err != nil {
-			log.Error(ctx, err, "run")
+			c.mu.Lock()
+			c.state = FailedState
+			c.mu.Unlock()
+
+			log.Error(ctx, err, "failed")
 			return
 		}
 
@@ -125,17 +141,7 @@ func (c *Coordinator) run(ctx context.Context) error {
 	c.startedAt = startedAt
 	c.mu.Unlock()
 
-	catalog := NewCatalog()
-	cloner := &DataCloner{
-		Source:   c.source,
-		Target:   c.target,
-		Drop:     c.drop,
-		NSFilter: c.nsFilter,
-		Catalog:  catalog,
-	}
-	c.cloner = cloner
-
-	err = cloner.Clone(ctx)
+	err = c.cloner.Clone(ctx)
 	if err != nil {
 		return errors.Wrap(err, "close")
 	}
@@ -145,31 +151,22 @@ func (c *Coordinator) run(ctx context.Context) error {
 		return errors.Wrap(err, "get cluster time")
 	}
 
-	repl := &ChangeReplicator{
-		Source:   c.source,
-		Target:   c.target,
-		Drop:     c.drop,
-		NSFilter: c.nsFilter,
-		Catalog:  catalog,
-	}
-
 	c.mu.Lock()
 	c.clonedAt = clonedAt
-	c.repl = repl
 	c.mu.Unlock()
 
 	log.Infof(ctx, "starting change replication at %d.%d", startedAt.T, startedAt.I)
-	err = repl.Start(ctx, startedAt)
+	err = c.repl.Start(ctx, startedAt)
 	if err != nil {
 		return errors.Wrap(err, "start change replication")
 	}
 
-	err = repl.Wait()
+	err = c.repl.Wait()
 	if err != nil {
 		return errors.Wrap(err, "change replication")
 	}
 
-	err = catalog.FinalizeIndexes(ctx, c.target)
+	err = c.catalog.FinalizeIndexes(ctx, c.target)
 	if err != nil {
 		return errors.Wrap(err, "finalize indexes")
 	}
@@ -185,8 +182,17 @@ func (c *Coordinator) Finalize(ctx context.Context) error {
 		return errors.New(string(c.state))
 	}
 
-	if c.repl == nil || c.repl.GetLastAppliedOpTime().Before(c.clonedAt) {
-		return errors.New("not ready")
+	cloneStatus := c.cloner.Status()
+	if !cloneStatus.Finished {
+		return errors.New("clone has not finished")
+	}
+
+	replStatus := c.repl.Status()
+	if replStatus.LastAppliedOpTime.IsZero() {
+		return errors.New("repl has not been started")
+	}
+	if replStatus.LastAppliedOpTime.Before(c.clonedAt) {
+		return errors.New("not finalizable")
 	}
 
 	c.repl.Pause()
@@ -200,29 +206,29 @@ func (c *Coordinator) Status(ctx context.Context) (*Status, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	s := &Status{
-		State: c.state,
-		Info:  "waiting for start",
+	s := &Status{State: c.state}
+
+	if c.state == IdleState {
+		return s, nil
 	}
 
-	if c.repl != nil {
-		optime := c.repl.GetLastAppliedOpTime()
-		s.Finalizable = !optime.Before(c.clonedAt)
-		s.LastAppliedOpTime = optime
-		s.EventsProcessed = c.repl.EventsProcessed
+	cloneStatus := c.cloner.Status()
+	s.Clone = cloneStatus
+
+	replStatus := c.repl.Status()
+	s.LastAppliedOpTime = replStatus.LastAppliedOpTime
+	s.EventsProcessed = replStatus.EventsProcessed
+	if cloneStatus.Finished && !replStatus.LastAppliedOpTime.IsZero() {
+		s.Finalizable = !replStatus.LastAppliedOpTime.Before(c.clonedAt)
+	}
+
+	switch {
+	case c.state == IdleState:
+		s.Info = "waiting for start"
+	case c.state == RunningState && !cloneStatus.Finished:
+		s.Info = "cloning data"
+	case c.state == RunningState && !replStatus.LastAppliedOpTime.IsZero():
 		s.Info = "replicating changes"
-	}
-
-	if c.cloner != nil {
-		s.Clone = CloneStatus{
-			Finished:             c.cloner.Finished,
-			EstimatedTotalBytes:  c.cloner.EstimatedTotalBytes.Load(),
-			EstimatedClonedBytes: c.cloner.EstimatedClonedBytes.Load(),
-		}
-
-		if c.cloner.Finished {
-			s.Info = "cloning data"
-		}
 	}
 
 	return s, nil

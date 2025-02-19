@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -24,6 +25,25 @@ type DataCloner struct {
 	EstimatedTotalBytes  atomic.Int64
 	EstimatedClonedBytes atomic.Int64
 	Finished             bool
+
+	mu sync.Mutex
+}
+
+type CloneStatus struct {
+	Finished             bool
+	EstimatedTotalBytes  int64
+	EstimatedClonedBytes int64
+}
+
+func (c *DataCloner) Status() CloneStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return CloneStatus{
+		Finished:             c.Finished,
+		EstimatedTotalBytes:  c.EstimatedTotalBytes.Load(),
+		EstimatedClonedBytes: c.EstimatedClonedBytes.Load(),
+	}
 }
 
 func (c *DataCloner) Clone(ctx context.Context) error {
@@ -66,7 +86,7 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 
 			grp.Go(func() error {
 				ctx := log.WithAttrs(grpCtx, log.NS(db, spec.Name))
-				log.Tracef(ctx, "")
+				log.Trace(ctx, "")
 
 				var err error
 				switch spec.Type {
@@ -91,7 +111,9 @@ func (c *DataCloner) Clone(ctx context.Context) error {
 		return errors.Wrap(err, "wait")
 	}
 
+	c.mu.Lock()
 	c.Finished = true
+	c.mu.Unlock()
 	return nil
 }
 
@@ -107,22 +129,10 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "list indexes")
 	}
 
-	var indexes []IndexSpecification
+	var indexes []*IndexSpecification
 	err = cur.All(ctx, &indexes)
 	if err != nil {
 		return errors.Wrap(err, "decode indexes")
-	}
-
-	for i := range indexes {
-		if spec.IDIndex == nil {
-			if indexes[i].isClustered() {
-				continue
-			}
-		} else if spec.IDIndex.Name == indexes[i].Name {
-			continue
-		}
-
-		c.Catalog.CreateIndex(db, spec.Name, indexes[i])
 	}
 
 	if c.Drop {
@@ -138,12 +148,12 @@ func (c *DataCloner) cloneCollection(
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createCollection(ctx, c.Target, db, spec.Name, &options)
+	err = c.Catalog.CreateCollection(ctx, c.Target, db, spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
 
-	err = c.Catalog.BuildCollectionIndexes(ctx, c.Target, db, spec.Name)
+	err = c.Catalog.CreateIndexes(ctx, c.Target, db, spec.Name, indexes)
 	if err != nil {
 		return errors.Wrap(err, "build collection indexes")
 	}
@@ -193,11 +203,11 @@ func (c *DataCloner) cloneView(
 		return errors.Wrap(err, "unmarshal options")
 	}
 
-	err = createView(ctx, c.Target, db, spec.Name, &options)
+	err = c.Catalog.CreateView(ctx, c.Target, db, spec.Name, &options)
 	if err != nil {
 		return errors.Wrap(err, "create view")
 	}
 
-	log.Info(ctx, "cloned view")
+	log.Info(ctx, "created view")
 	return nil
 }

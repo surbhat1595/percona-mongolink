@@ -6,7 +6,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type OperationType string
@@ -230,7 +229,7 @@ type CreateEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription *createCollectionOptions `bson:"operationDescription,omitempty"`
+	OperationDescription createCollectionOptions `bson:"operationDescription"`
 
 	BaseEvent `bson:",inline"`
 }
@@ -244,17 +243,19 @@ func (e CreateEvent) IsTimeseries() bool {
 }
 
 type createCollectionOptions struct {
-	IDIndex        bson.D `bson:"idIndex,omitempty"`
 	ClusteredIndex bson.D `bson:"clusteredIndex,omitempty"`
 
-	Capped bool  `bson:"capped"`
-	Size   int32 `bson:"size"`
-	Max    int32 `bson:"max"`
+	Capped *bool  `bson:"capped,omitempty"`
+	Size   *int32 `bson:"size,omitempty"`
+	Max    *int32 `bson:"max,omitempty"`
 
-	ViewOn   string `bson:"viewOn"`
-	Pipeline []any  `bson:"pipeline"`
+	ViewOn   string `bson:"viewOn,omitempty"`
+	Pipeline any    `bson:"pipeline,omitempty"`
 
-	Collation *options.Collation `bson:"collation,omitempty"`
+	Collation bson.Raw `bson:"collation,omitempty"`
+
+	StorageEngine       bson.Raw `bson:"storageEngine,omitempty"`
+	IndexOptionDefaults bson.Raw `bson:"indexOptionDefaults,omitempty"`
 }
 
 // DropEvent occurs when a collection is dropped from a database.
@@ -280,11 +281,11 @@ type CreateIndexesEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription createIndexesOpDesc `bson:"operationDescription,omitempty"`
+	OperationDescription createIndexesOpDesc `bson:"operationDescription"`
 }
 
 type createIndexesOpDesc struct {
-	Indexes []IndexSpecification `bson:"indexes"`
+	Indexes []*IndexSpecification `bson:"indexes"`
 }
 
 // CreateIndexesEvent occurs when an index is dropped from the collection and
@@ -300,11 +301,13 @@ type DropIndexesEvent struct {
 	// expanded events.
 	//
 	// New in version 6.0.
-	OperationDescription dropIndexesOpDesc `bson:"operationDescription,omitempty"`
+	OperationDescription dropIndexesOpDesc `bson:"operationDescription"`
 }
 
 type dropIndexesOpDesc struct {
-	Indexes []IndexSpecification `bson:"indexes"`
+	Indexes []struct {
+		Name string `bson:"name"`
+	} `bson:"indexes"`
 }
 
 // ModifyEvent when a collection is modified, such as when the collMod command
@@ -328,10 +331,31 @@ type modifyOpDesc struct {
 	// Index is the index that was modified.
 	//
 	// New in version 6.0.
-	Index *struct {
-		Name   string `bson:"name"`
-		Hidden *bool  `bson:"hidden"`
-	} `bson:"index"`
+	Index *modifyIndexOption `bson:"index,omitempty"`
+
+	CappedSize *int64 `bson:"cappedSize,omitempty"`
+	CappedMax  *int64 `bson:"cappedMax,omitempty"`
+
+	ViewOn   string `bson:"viewOn,omitempty"`
+	Pipeline any    `bson:"pipeline,omitempty"`
+
+	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds,omitempty"`
+
+	ChangeStreamPreAndPostImages *struct {
+		Enabled bool `bson:"enabled"`
+	} `bson:"changeStreamPreAndPostImages,omitempty"`
+
+	Validator       *bson.Raw `bson:"validator,omitempty"`
+	ValidatorLevel  *string   `bson:"validatorLevel,omitempty"`
+	ValidatorAction *string   `bson:"validatorAction,omitempty"`
+}
+
+type modifyIndexOption struct {
+	Name               string `bson:"name"`
+	Hidden             *bool  `bson:"hidden,omitempty"`
+	Unique             *bool  `bson:"unique,omitempty"`
+	PrepareUnique      *bool  `bson:"prepareUnique,omitempty"`
+	ExpireAfterSeconds *int64 `bson:"expireAfterSeconds,omitempty"`
 }
 
 // InsertEvent occurs when an operation adds documents to a collection.
@@ -402,7 +426,7 @@ type UpdateEvent struct {
 	// included for insert events.
 	//
 	// Changed in version 6.0.
-	FullDocument bson.D `bson:"fullDocument,omitempty"`
+	FullDocument bson.D `bson:"fullDocument"`
 
 	// FullDocumentBeforeChange is the document before changes were applied by
 	// the operation. That is, the document pre-image.
@@ -483,7 +507,7 @@ type ReplaceEvent struct {
 	// included for insert events.
 	//
 	// Changed in version 6.0.
-	FullDocument bson.Raw `bson:"fullDocument,omitempty"`
+	FullDocument bson.Raw `bson:"fullDocument"`
 
 	// FullDocumentBeforeChange is the document before changes were applied by
 	// the operation. That is, the document pre-image.
