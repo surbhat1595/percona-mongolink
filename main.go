@@ -16,7 +16,7 @@ import (
 
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
-	"github.com/percona-lab/percona-mongolink/mlink"
+	"github.com/percona-lab/percona-mongolink/mongolink"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
 
@@ -74,12 +74,14 @@ func main() {
 	}
 }
 
+// serverOptions holds the options for the server.
 type serverOptions struct {
 	Port      string
 	SourceURI string
 	TargetURI string
 }
 
+// verify checks if the server options are valid.
 func (o serverOptions) verify() error {
 	switch {
 	case o.SourceURI == "" && o.TargetURI == "":
@@ -96,6 +98,7 @@ func (o serverOptions) verify() error {
 
 var errUnsupportedPortRange = errors.New("port value is outside supported range [1024 - 65535]")
 
+// buildServerAddr builds the server address from the port.
 func buildServerAddr(port string) (string, error) {
 	i, err := strconv.ParseInt(port, 10, 32)
 	if err != nil {
@@ -109,13 +112,15 @@ func buildServerAddr(port string) (string, error) {
 	return "localhost:" + port, nil
 }
 
+// server represents the replication server.
 type server struct {
 	sourceCluster *mongo.Client
 	targetCluster *mongo.Client
 
-	repl *mlink.Coordinator
+	repl *mongolink.MongoLink
 }
 
+// newServer creates a new server with the given options.
 func newServer(ctx context.Context, options serverOptions) (*server, error) {
 	source, err := topo.Connect(ctx, options.SourceURI)
 	if err != nil {
@@ -132,17 +137,19 @@ func newServer(ctx context.Context, options serverOptions) (*server, error) {
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		repl:          mlink.New(source, target),
+		repl:          mongolink.New(source, target),
 	}
 	return s, nil
 }
 
+// Close closes the server connections.
 func (s *server) Close(ctx context.Context) error {
 	err0 := s.sourceCluster.Disconnect(ctx)
 	err1 := s.targetCluster.Disconnect(ctx)
 	return errors.Join(err0, err1)
 }
 
+// Handler returns the HTTP handler for the server.
 func (s *server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -163,6 +170,7 @@ func (s *server) Handler() http.Handler {
 	return logAccess(mux)
 }
 
+// handleStart handles the /start endpoint.
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	ctx := log.WithAttrs(r.Context(), log.Scope("/start"))
 
@@ -178,7 +186,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	options := &mlink.StartOptions{
+	options := &mongolink.StartOptions{
 		DropBeforeCreate: true,
 		// TODO: uncomment when tests will be added
 		// DropBeforeCreate: params.DropBeforeCreate,
@@ -203,6 +211,7 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleFinalize handles the /finalize endpoint.
 func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	ctx := log.WithAttrs(r.Context(), log.Scope("/finalize"))
 
@@ -224,6 +233,7 @@ func (s *server) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleStatus handles the /status endpoint.
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := log.WithAttrs(r.Context(), log.Scope("/status"))
 
@@ -264,6 +274,7 @@ func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// startRequest represents the request body for the /start endpoint.
 type startRequest struct {
 	// TODO: uncomment when tests will be added
 	// DropBeforeCreate bool `json:"dropBeforeCreateCollection"`
@@ -271,34 +282,39 @@ type startRequest struct {
 	ExcludeNamespaces []string `json:"excludeNamespaces,omitempty"`
 }
 
+// startReponse represents the response body for the /start endpoint.
 type startReponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }
 
+// finalizeReponse represents the response body for the /finalize endpoint.
 type finalizeReponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }
 
+// CloneStatus represents the status of the cloning process.
 type CloneStatus struct {
 	Finished             bool  `json:"finished"`
 	EstimatedTotalBytes  int64 `json:"estimatedTotalBytes"`
 	EstimatedClonedBytes int64 `json:"estimatedClonedBytes"`
 }
 
+// statusResponse represents the response body for the /status endpoint.
 type statusResponse struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 
-	State             mlink.State `json:"state"`
-	Finalizable       bool        `json:"finalizable,omitempty"`
-	LastAppliedOpTime string      `json:"lastAppliedOpTime,omitempty"`
-	Info              string      `json:"info"`
-	EventsProcessed   int64       `json:"eventsProcessed"`
-	Clone             CloneStatus `json:"clone"`
+	State             mongolink.State `json:"state"`
+	Finalizable       bool            `json:"finalizable,omitempty"`
+	LastAppliedOpTime string          `json:"lastAppliedOpTime,omitempty"`
+	Info              string          `json:"info"`
+	EventsProcessed   int64           `json:"eventsProcessed"`
+	Clone             CloneStatus     `json:"clone"`
 }
 
+// internalServerError sends an internal server error response.
 func internalServerError(w http.ResponseWriter) {
 	http.Error(w,
 		http.StatusText(http.StatusInternalServerError),
