@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/sel"
@@ -178,6 +179,8 @@ func (c *Clone) cloneCollection(
 	db string,
 	spec *mongo.CollectionSpecification,
 ) error {
+	lg := log.Ctx(ctx)
+
 	cur, err := c.Source.Database(db).Collection(spec.Name).Indexes().List(ctx)
 	if err != nil {
 		return errors.Wrap(err, "list indexes")
@@ -218,19 +221,48 @@ func (c *Clone) cloneCollection(
 	}
 	defer cur.Close(ctx)
 
+	docs := make([]interface{}, 0, 1000)
+	batch := 0
+	batchSize := 0
+
 	targetColl := c.Target.Database(db).Collection(spec.Name)
+
 	for cur.Next(ctx) {
-		_, err = targetColl.InsertOne(ctx, cur.Current)
-		if err != nil {
-			return errors.Wrap(err, "insert one")
+		if batchSize >= config.MaxCollectionCloneBatchSize {
+			_, err = targetColl.InsertMany(ctx, docs)
+			if err != nil {
+				return errors.Wrap(err, "insert documents")
+			}
+
+			c.clonedSize.Add(int64(batchSize))
+			lg.Debugf("cloning collection: %s.%s, inserted docs batch: %d, batch size: %d",
+				db, spec.Name, batch, batchSize)
+
+			docs = docs[:0]
+			batch++
+			batchSize = 0
+
+			continue
 		}
 
-		c.clonedSize.Add(int64(len(cur.Current)))
+		docs = append(docs, cur.Current)
+		batchSize += len(cur.Current)
 	}
 
 	err = cur.Err()
 	if err != nil {
 		return errors.Wrapf(err, "cloning failed %s.%s", db, spec.Name)
+	}
+
+	if len(docs) > 0 {
+		_, err = targetColl.InsertMany(ctx, docs)
+		if err != nil {
+			return errors.Wrap(err, "insert documents")
+		}
+
+		c.clonedSize.Add(int64(batchSize))
+		lg.Debugf("cloning collection: %s.%s, inserted last docs batch: %d, batch size: %d",
+			db, spec.Name, batch, batchSize)
 	}
 
 	return nil

@@ -173,14 +173,15 @@ func (ml *MongoLink) run(ctx context.Context) error {
 	ml.cloneStartedAtTS = cloneStartedAtSourceTS
 	ml.mu.Unlock()
 
-	cloneStartedAt := time.Now()
+	cloneStartAt := time.Now()
 
 	err = ml.clone.Clone(ctx)
 	if err != nil {
 		return errors.Wrap(err, "clone")
 	}
 
-	cloneFinishedAt := time.Now()
+	lg.InfoWith("Data clone is completed",
+		log.Elapsed(time.Since(cloneStartAt)))
 
 	cloneFinishedAtSourceTS, err := topo.ClusterTime(ctx, ml.source)
 	if err != nil {
@@ -191,8 +192,6 @@ func (ml *MongoLink) run(ctx context.Context) error {
 	ml.cloneFinishedAtTS = cloneFinishedAtSourceTS
 	ml.mu.Unlock()
 
-	lg.InfoWith("Data clone is completed",
-		log.Elapsed(cloneFinishedAt.Sub(cloneStartedAt)))
 	lg.Infof("Remaining logical seconds until Initial Sync completed: %d",
 		cloneFinishedAtSourceTS.T-cloneStartedAtSourceTS.T)
 	lg.Infof("Starting Change Replication since %d.%d source cluster time",
