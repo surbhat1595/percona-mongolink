@@ -15,9 +15,6 @@
   "black-formatter.args": [
     "-l 100"
   ],
-  "editor.rulers": [
-    100
-  ],
   "files.encoding": "utf8",
   "files.eol": "\n",
   "files.insertFinalNewline": true,
