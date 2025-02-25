@@ -221,14 +221,15 @@ func (c *Clone) cloneCollection(
 	}
 	defer cur.Close(ctx)
 
-	docs := make([]interface{}, 0, 1000)
+	const initialBufferSize = 1000
+	docs := make([]any, 0, initialBufferSize)
 	batch := 0
 	batchSize := 0
 
 	targetColl := c.Target.Database(db).Collection(spec.Name)
 
 	for cur.Next(ctx) {
-		if batchSize >= config.MaxCollectionCloneBatchSize {
+		if batchSize+len(cur.Current) > config.MaxCollectionCloneBatchSize {
 			_, err = targetColl.InsertMany(ctx, docs)
 			if err != nil {
 				return errors.Wrap(err, "insert documents")
@@ -241,8 +242,6 @@ func (c *Clone) cloneCollection(
 			docs = docs[:0]
 			batch++
 			batchSize = 0
-
-			continue
 		}
 
 		docs = append(docs, cur.Current)
