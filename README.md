@@ -31,7 +31,7 @@ Percona MongoLink is a tool for replicating data from a source MongoDB cluster t
 2. Build the project:
 
     ```sh
-    go build -o bin/mongolink ./mongolink
+    go build -o bin/mongolink .
     ```
 
 3. Run the server:
@@ -59,7 +59,7 @@ To start the replication process, you can either use the command-line interface 
 #### Using Command-Line Interface
 
 ```sh
-bin/mongolink start --port <port>
+bin/mongolink start
 ```
 
 #### Using HTTP API
@@ -78,7 +78,7 @@ To finalize the replication process, you can either use the command-line interfa
 #### Using Command-Line Interface
 
 ```sh
-bin/mongolink finalize --port <port>
+bin/mongolink finalize
 ```
 
 #### Using HTTP API
@@ -94,7 +94,7 @@ To check the current status of the replication process, you can either use the c
 #### Using Command-Line Interface
 
 ```sh
-bin/mongolink status --port <port>
+bin/mongolink status
 ```
 
 #### Using HTTP API
