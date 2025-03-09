@@ -531,6 +531,24 @@ type ReplaceEvent struct {
 	BaseEvent `bson:",inline"`
 }
 
+// RenameEvent occurs when a collection is renamed.
+type RenameEvent struct {
+	// OperationDescription is additional information on the change operation.
+	//
+	// This document and its subfields only appear when the change stream uses
+	// expanded events.
+	//
+	// New in version 6.0.
+	OperationDescription renameOpDesc `bson:"operationDescription"`
+
+	BaseEvent `bson:",inline"`
+}
+
+// renameOpDesc represents the description of the rename operation.
+type renameOpDesc struct {
+	To Namespace `bson:"to"`
+}
+
 // ParsingError represents an error that occurred during parsing.
 type ParsingError struct {
 	cause error
