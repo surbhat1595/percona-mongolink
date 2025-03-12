@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"time"
 
@@ -43,6 +44,9 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "mongolink",
 		Short: "Percona MongoLink replication tool",
+
+		SilenceUsage: true,
+
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
 			logLevel, err := zerolog.ParseLevel(logLevelFlag)
 			if err != nil {
@@ -53,33 +57,46 @@ func main() {
 			ctx := lg.WithContext(context.Background())
 			cmd.SetContext(ctx)
 		},
+
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Check if this is the root command being executed without a subcommand
 			if cmd.CalledAs() != "mongolink" || cmd.ArgsLenAtDash() != -1 {
 				return nil
 			}
 
-			port, err := cmd.Flags().GetString("port")
-			if err != nil {
-				return err //nolint:wrapcheck
+			port, _ := cmd.Flags().GetString("port")
+			if port == "" {
+				port = os.Getenv("PML_PORT")
 			}
 
 			sourceURI, _ := cmd.Flags().GetString("source")
+			if sourceURI == "" {
+				sourceURI = os.Getenv("PML_SOURCE_URI")
+			}
 			if sourceURI == "" {
 				return errors.New("required flag --source not set")
 			}
 
 			targetURI, _ := cmd.Flags().GetString("target")
 			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
+			if targetURI == "" {
 				return errors.New("required flag --target not set")
+			}
+
+			if ok, _ := cmd.Flags().GetBool("reset-state"); ok {
+				err := resetState(cmd.Context(), targetURI)
+				if err != nil {
+					return err
+				}
+
+				log.New("cli").Info("State has been reset")
 			}
 
 			return runServer(cmd.Context(), port, sourceURI, targetURI)
 		},
 	}
-
-	rootCmd.SilenceErrors = true
-	rootCmd.SilenceUsage = true
 
 	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
 	rootCmd.PersistentFlags().BoolVar(&logJSON, "log-json", false, "Output log in JSON format")
@@ -88,6 +105,8 @@ func main() {
 	rootCmd.Flags().StringVar(&port, "port", "2242", "Port number")
 	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
 	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
+	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
 
 	statusCmd := &cobra.Command{
 		Use:   "status",
@@ -115,7 +134,7 @@ func main() {
 	}
 
 	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
-	_ = startCmd.Flags().MarkHidden("pause-on-initial-sync")
+	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
 	finalizeCmd := &cobra.Command{
 		Use:   "finalize",
@@ -141,12 +160,141 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd)
+	resetCmd := &cobra.Command{
+		Use:    "reset",
+		Short:  "Reset state",
+		Hidden: true,
+	}
+
+	resetAllCmd := &cobra.Command{
+		Use:   "all",
+		Short: "Reset MongoLink state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
+			if targetURI == "" {
+				return errors.New("required flag --target not set")
+			}
+
+			err := resetState(cmd.Context(), targetURI)
+			if err != nil {
+				return err
+			}
+
+			log.New("cli").Info("OK")
+
+			return nil
+		},
+	}
+
+	resetRecoveryCmd := &cobra.Command{
+		Use:   "recovery",
+		Short: "Reset recovery state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
+			if targetURI == "" {
+				return errors.New("required flag --target not set")
+			}
+
+			ctx := cmd.Context()
+
+			target, err := topo.Connect(ctx, targetURI)
+			if err != nil {
+				return errors.Wrap(err, "connect")
+			}
+
+			defer func() {
+				err := target.Disconnect(ctx)
+				if err != nil {
+					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
+				}
+			}()
+
+			err = ClearRecoveryData(ctx, target)
+			if err != nil {
+				return err
+			}
+
+			log.New("cli").Info("OK")
+
+			return nil
+		},
+	}
+
+	resetHeartbeatCmd := &cobra.Command{
+		Use:   "heartbeat",
+		Short: "Reset heartbeat state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			targetURI, _ := cmd.Flags().GetString("target")
+			if targetURI == "" {
+				targetURI = os.Getenv("PML_TARGET_URI")
+			}
+			if targetURI == "" {
+				return errors.New("required flag --target not set")
+			}
+
+			ctx := cmd.Context()
+
+			target, err := topo.Connect(ctx, targetURI)
+			if err != nil {
+				return errors.Wrap(err, "connect")
+			}
+
+			defer func() {
+				err := target.Disconnect(ctx)
+				if err != nil {
+					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
+				}
+			}()
+
+			err = DeleteHeartbeat(ctx, target)
+			if err != nil {
+				return err
+			}
+
+			log.New("cli").Info("OK")
+
+			return nil
+		},
+	}
+
+	resetAllCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	resetHeartbeatCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	resetRecoveryCmd.Flags().String("target", "", "MongoDB connection string for the target")
+
+	resetCmd.AddCommand(resetAllCmd, resetRecoveryCmd, resetHeartbeatCmd)
+	rootCmd.AddCommand(statusCmd, startCmd, finalizeCmd, pauseCmd, resumeCmd, resetCmd)
 
 	err := rootCmd.Execute()
 	if err != nil {
 		zerolog.Ctx(context.Background()).Fatal().Err(err).Msg("")
 	}
+}
+
+func resetState(ctx context.Context, targetURI string) error {
+	target, err := topo.Connect(ctx, targetURI)
+	if err != nil {
+		return errors.Wrap(err, "connect")
+	}
+
+	defer func() {
+		err := target.Disconnect(ctx)
+		if err != nil {
+			log.Ctx(ctx).Warn("Disconnect: " + err.Error())
+		}
+	}()
+
+	err = target.Database(config.MongoLinkDatabase).Drop(ctx)
+	if err != nil {
+		return errors.Wrap(err, "drop database")
+	}
+
+	return nil
 }
 
 // runServer starts the HTTP server with the provided configuration.
@@ -167,10 +315,24 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 		return errors.Wrap(err, "build server address")
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	defer stop()
+
 	srv, err := createServer(ctx, sourceURI, targetURI)
 	if err != nil {
 		return errors.Wrap(err, "new server")
 	}
+
+	go func() {
+		<-ctx.Done()
+
+		err := srv.Close(context.Background())
+		if err != nil {
+			log.New("server").Error(err, "close server")
+		}
+
+		os.Exit(0)
+	}()
 
 	httpServer := http.Server{
 		Addr:    addr,
@@ -182,16 +344,7 @@ func runServer(ctx context.Context, port, sourceURI, targetURI string) error {
 
 	log.Ctx(ctx).Info("Starting server at http://" + addr)
 
-	err = httpServer.ListenAndServe()
-	if err != nil {
-		return errors.Wrap(err, "listen")
-	}
-
-	if err := srv.Close(ctx); err != nil {
-		return errors.Wrap(err, "close server")
-	}
-
-	return nil
+	return httpServer.ListenAndServe() //nolint:wrapcheck
 }
 
 var errUnsupportedPortRange = errors.New("port value is outside the supported range [1024 - 65535]")
@@ -218,6 +371,8 @@ type server struct {
 	targetCluster *mongo.Client
 	// mlink is the MongoLink instance for cluster replication.
 	mlink *mongolink.MongoLink
+
+	stopHeartbeat StopHeartbeat
 }
 
 // createServer creates a new server with the given options.
@@ -260,21 +415,37 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 
 	lg.Debug("Connected to target cluster")
 
+	stopHeartbeat, err := RunHeartbeat(ctx, target)
+	if err != nil {
+		return nil, errors.Wrap(err, "run heartbeat")
+	}
+
+	mlink := mongolink.New(source, target)
+
+	err = Restore(ctx, target, mlink)
+	if err != nil {
+		return nil, errors.Wrap(err, "recover MongoLink")
+	}
+
+	go RunCheckpointing(ctx, target, mlink)
+
 	s := &server{
 		sourceCluster: source,
 		targetCluster: target,
-		mlink:         mongolink.New(source, target),
+		mlink:         mlink,
+		stopHeartbeat: stopHeartbeat,
 	}
 
 	return s, nil
 }
 
-// Close closes the server connections.
+// Close stops heartbeat and closes the server connections.
 func (s *server) Close(ctx context.Context) error {
-	err0 := s.sourceCluster.Disconnect(ctx)
-	err1 := s.targetCluster.Disconnect(ctx)
+	err0 := s.stopHeartbeat(ctx)
+	err1 := s.sourceCluster.Disconnect(ctx)
+	err2 := s.targetCluster.Disconnect(ctx)
 
-	return errors.Join(err0, err1)
+	return errors.Join(err0, err1, err2)
 }
 
 // Handler returns the HTTP handler for the server.
