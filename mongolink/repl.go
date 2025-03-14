@@ -16,9 +16,13 @@ import (
 	"github.com/percona-lab/percona-mongolink/list"
 	"github.com/percona-lab/percona-mongolink/log"
 	"github.com/percona-lab/percona-mongolink/sel"
+	"github.com/percona-lab/percona-mongolink/topo"
 )
 
-var ErrInvalidateEvent = errors.New("invalidate")
+var (
+	ErrInvalidateEvent  = errors.New("invalidate")
+	ErrOplogHistoryLost = errors.New("oplog history is lost")
+)
 
 // Repl handles replication from a source MongoDB to a target MongoDB.
 type Repl struct {
@@ -273,7 +277,15 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 	go func() {
 		err := r.watchChangeStream(watchCtx, opts, eventC)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.New("repl:loop").Error(err, "change stream")
+			if topo.IsChangeStreamHistoryLost(err) {
+				err = ErrOplogHistoryLost
+			}
+
+			r.lock.Lock()
+			r.err = errors.Wrap(err, "watch change stream")
+			r.lock.Unlock()
+
+			log.New("repl:loop").Error(err, "watch change stream")
 		}
 	}()
 
@@ -282,7 +294,11 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 
 	err := r.replication(replCtx, eventC)
 	if err != nil {
-		log.New("repl:loop").Error(err, "")
+		r.lock.Lock()
+		r.err = errors.Wrap(err, "replication")
+		r.lock.Unlock()
+
+		log.New("repl:loop").Error(err, "replication")
 	}
 }
 
@@ -316,7 +332,7 @@ func (r *Repl) watchChangeStream(
 	}
 
 	if err := cur.Err(); err != nil {
-		return errors.Wrap(err, "next")
+		return errors.Wrap(err, "cursor")
 	}
 
 	return nil
