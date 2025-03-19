@@ -20,14 +20,13 @@ const (
 const (
 	// MongoLinkDatabase is the name of the MongoDB database used by MongoLink.
 	MongoLinkDatabase = "percona_mongolink"
-	// TickCollection is the name of the collection used for ticks during change replication.
-	TickCollection = "ticks"
 	// RecoveryCollection is the name of the collection used for recovery data.
 	RecoveryCollection = "checkpoints"
 	// HeartbeatCollection is the name of the collection used for heartbeats.
 	HeartbeatCollection = "heartbeats"
 )
 
+// Recovery and heartbeat settings.
 const (
 	// RecoveryCheckpointingInternal is the interval for recovery checkpointing.
 	RecoveryCheckpointingInternal = time.Minute
@@ -42,13 +41,20 @@ const (
 // Change stream and replication settings.
 const (
 	// ChangeStreamBatchSize is the batch size for MongoDB change streams.
-	ChangeStreamBatchSize = 100
-
-	// ReplTickInteral is the interval for replication ticks.
-	ReplTickInteral = time.Second
-
-	// ReplInitialSyncCheckInterval is the interval for initial sync checks.
-	ReplInitialSyncCheckInterval = time.Second
+	ChangeStreamBatchSize = 1000
+	// ChangeStreamAwaitTime is the maximum amount of time to wait for new change event.
+	ChangeStreamAwaitTime = time.Second
+	// ReplQueueSize defines the buffer size of the internal channel used to transfer
+	// events between the change stream read and the change replication.
+	ReplQueueSize = ChangeStreamBatchSize
+	// BulkOpsSize is the maximum number of operations in a bulk write.
+	BulkOpsSize = ChangeStreamBatchSize
+	// BulkOpsInterval is the maximum interval between bulk write operations.
+	BulkOpsInterval = ChangeStreamAwaitTime
+	// InitialSyncCheckInterval is the interval for checking the initial sync status.
+	InitialSyncCheckInterval = 10 * time.Second
+	// PrintLagTimeInterval is the interval at which the lag time is printed to the logs.
+	PrintLagTimeInterval = InitialSyncCheckInterval
 )
 
 // CloneMaxWriteSizePerCollection is the maximum write size per collection during the cloning

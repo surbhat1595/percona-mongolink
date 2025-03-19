@@ -198,6 +198,13 @@ func (c *Clone) Start(context.Context) error {
 
 		c.finishTime = time.Now()
 
+		if err != nil {
+			lg.With(log.Elapsed(c.finishTime.Sub(c.startTime))).
+				Error(err, "Data cloning has failed")
+
+			return
+		}
+
 		lg.With(log.Elapsed(c.finishTime.Sub(c.startTime))).
 			Info("Data cloning completed")
 	}()
@@ -252,6 +259,10 @@ func (c *Clone) run() error {
 	grp.SetLimit(runtime.GOMAXPROCS(0))
 
 	for _, db := range databases {
+		if db == config.MongoLinkDatabase {
+			continue
+		}
+
 		collections, err := topo.ListCollectionNames(grpCtx, c.source, db)
 		if err != nil {
 			return errors.Wrap(err, "list collection names")
@@ -263,7 +274,7 @@ func (c *Clone) run() error {
 			}
 
 			if !c.nsFilter(db, collName) {
-				lg.With(log.NS(db, collName)).Debug("not selected")
+				lg.With(log.NS(db, collName)).Debug("Not selected")
 
 				continue
 			}
@@ -272,7 +283,7 @@ func (c *Clone) run() error {
 				err := c.cloneCollection(grpCtx, db, collName)
 				if err != nil {
 					if e := (CollectionNotFoundError{}); errors.As(err, &e) {
-						log.Ctx(ctx).Error(err, "")
+						log.New("clone").With(log.NS(db, collName)).Error(err, "")
 
 						return nil
 					}

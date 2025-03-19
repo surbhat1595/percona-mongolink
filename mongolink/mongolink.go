@@ -279,7 +279,7 @@ func (ml *MongoLink) Start(_ context.Context, options *StartOptions) error {
 
 	ml.nsInclude = options.IncludeNamespaces
 	ml.nsExclude = options.ExcludeNamespaces
-	ml.nsFilter = sel.MakeFilter(options.IncludeNamespaces, options.ExcludeNamespaces)
+	ml.nsFilter = sel.MakeFilter(ml.nsInclude, ml.nsExclude)
 	ml.pauseOnInitialSync = options.PauseOnInitialSync
 	ml.catalog = NewCatalog(ml.target)
 	ml.clone = NewClone(ml.source, ml.target, ml.catalog, ml.nsFilter)
@@ -343,7 +343,15 @@ func (ml *MongoLink) run() {
 		}
 	}
 
-	go ml.monitorInitialSync(ctx)
+	if replStatus.LastReplicatedOpTime.Before(cloneStatus.FinishTS) {
+		go func() {
+			ml.monitorInitialSync(ctx)
+			ml.monitorLagTime(ctx)
+		}()
+	} else {
+		go ml.monitorLagTime(ctx)
+	}
+
 	<-ml.repl.Done()
 
 	replStatus = ml.repl.Status()
@@ -355,7 +363,7 @@ func (ml *MongoLink) run() {
 func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 	lg := log.Ctx(ctx)
 
-	t := time.NewTicker(config.ReplInitialSyncCheckInterval)
+	t := time.NewTicker(config.InitialSyncCheckInterval)
 	defer t.Stop()
 
 	cloneStatus := ml.clone.Status()
@@ -404,6 +412,32 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 	}
 }
 
+func (ml *MongoLink) monitorLagTime(ctx context.Context) {
+	lg := log.Ctx(ctx)
+
+	t := time.NewTicker(config.PrintLagTimeInterval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-t.C:
+		}
+
+		sourceTS, err := topo.ClusterTime(ctx, ml.source)
+		if err != nil {
+			lg.Error(err, "")
+
+			continue
+		}
+
+		lastTS := ml.repl.Status().LastReplicatedOpTime
+		lg.Infof("Lag Time: %d", max(sourceTS.T-lastTS.T, 0))
+	}
+}
+
 // Pause pauses the replication process.
 func (ml *MongoLink) Pause(ctx context.Context) error {
 	ml.lock.Lock()
@@ -422,6 +456,10 @@ func (ml *MongoLink) Pause(ctx context.Context) error {
 }
 
 func (ml *MongoLink) doPause(ctx context.Context) error {
+	if ml.state != StateRunning {
+		return errors.New("cannot pause: not running")
+	}
+
 	replStatus := ml.repl.Status()
 
 	if !replStatus.IsRunning() {
@@ -510,12 +548,15 @@ func (ml *MongoLink) Finalize(ctx context.Context, options FinalizeOptions) erro
 	lg.Info("Starting finalization")
 
 	if status.Repl.IsRunning() {
+		lg.Info("Pausing Change Replication")
+
 		err := ml.repl.Pause(ctx)
 		if err != nil {
 			return errors.Wrap(err, "pause change replication")
 		}
 
 		<-ml.repl.Done()
+		lg.Info("Change Replication is paused")
 
 		err = ml.repl.Status().Err
 		if err != nil {
