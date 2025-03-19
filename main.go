@@ -10,11 +10,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
@@ -31,240 +33,250 @@ const (
 	ServerResponseTimeout   = 5 * time.Second
 )
 
-func main() {
-	var (
-		logLevelFlag string
-		logJSON      bool
-		logNoColor   bool
+//nolint:gochecknoglobals
+var rootCmd = &cobra.Command{
+	Use:   "mongolink",
+	Short: "Percona MongoLink replication tool",
 
-		port string
-	)
+	SilenceUsage: true,
 
-	rootCmd := &cobra.Command{
-		Use:   "mongolink",
-		Short: "Percona MongoLink replication tool",
+	PersistentPreRun: func(cmd *cobra.Command, _ []string) {
+		logLevelFlag, _ := cmd.PersistentFlags().GetString("log-level")
+		logJSON, _ := cmd.PersistentFlags().GetBool("log-json")
+		logNoColor, _ := cmd.PersistentFlags().GetBool("log-no-color")
 
-		SilenceUsage: true,
+		logLevel, err := zerolog.ParseLevel(logLevelFlag)
+		if err != nil {
+			log.InitGlobals(0, logJSON, true).Fatal().Msg("Unknown log level")
+		}
 
-		PersistentPreRun: func(cmd *cobra.Command, _ []string) {
-			logLevel, err := zerolog.ParseLevel(logLevelFlag)
-			if err != nil {
-				log.InitGlobals(0, logJSON, true).Fatal().Msg("Unknown log level")
-			}
+		lg := log.InitGlobals(logLevel, logJSON, logNoColor)
+		ctx := lg.WithContext(context.Background())
+		cmd.SetContext(ctx)
+	},
 
-			lg := log.InitGlobals(logLevel, logJSON, logNoColor)
-			ctx := lg.WithContext(context.Background())
-			cmd.SetContext(ctx)
-		},
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		// Check if this is the root command being executed without a subcommand
+		if cmd.CalledAs() != "mongolink" || cmd.ArgsLenAtDash() != -1 {
+			return nil
+		}
 
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Check if this is the root command being executed without a subcommand
-			if cmd.CalledAs() != "mongolink" || cmd.ArgsLenAtDash() != -1 {
-				return nil
-			}
+		port, _ := cmd.Flags().GetString("port")
+		if port == "" {
+			port = os.Getenv("PML_PORT")
+		}
 
-			port, _ := cmd.Flags().GetString("port")
-			if port == "" {
-				port = os.Getenv("PML_PORT")
-			}
+		sourceURI, _ := cmd.Flags().GetString("source")
+		if sourceURI == "" {
+			sourceURI = os.Getenv("PML_SOURCE_URI")
+		}
+		if sourceURI == "" {
+			return errors.New("required flag --source not set")
+		}
 
-			sourceURI, _ := cmd.Flags().GetString("source")
-			if sourceURI == "" {
-				sourceURI = os.Getenv("PML_SOURCE_URI")
-			}
-			if sourceURI == "" {
-				return errors.New("required flag --source not set")
-			}
+		targetURI, _ := cmd.Flags().GetString("target")
+		if targetURI == "" {
+			targetURI = os.Getenv("PML_TARGET_URI")
+		}
+		if targetURI == "" {
+			return errors.New("required flag --target not set")
+		}
 
-			targetURI, _ := cmd.Flags().GetString("target")
-			if targetURI == "" {
-				targetURI = os.Getenv("PML_TARGET_URI")
-			}
-			if targetURI == "" {
-				return errors.New("required flag --target not set")
-			}
-
-			if ok, _ := cmd.Flags().GetBool("reset-state"); ok {
-				err := resetState(cmd.Context(), targetURI)
-				if err != nil {
-					return err
-				}
-
-				log.New("cli").Info("State has been reset")
-			}
-
-			return runServer(cmd.Context(), port, sourceURI, targetURI)
-		},
-	}
-
-	rootCmd.PersistentFlags().StringVar(&logLevelFlag, "log-level", "info", "Log level")
-	rootCmd.PersistentFlags().BoolVar(&logJSON, "log-json", false, "Output log in JSON format")
-	rootCmd.PersistentFlags().BoolVar(&logNoColor, "no-color", false, "Disable log color")
-
-	rootCmd.Flags().StringVar(&port, "port", "2242", "Port number")
-	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
-	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
-	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
-	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
-
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get the status of the replication process",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return NewClient(port).Status(cmd.Context())
-		},
-	}
-
-	startCmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start Cluster Replication",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			pauseOnInitialSync, err := cmd.Flags().GetBool("pause-on-initial-sync")
-			if err != nil {
-				return err //nolint:wrapcheck
-			}
-
-			startOptions := startRequest{
-				PauseOnInitialSync: pauseOnInitialSync,
-			}
-
-			return NewClient(port).Start(cmd.Context(), startOptions)
-		},
-	}
-
-	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
-	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
-
-	finalizeCmd := &cobra.Command{
-		Use:   "finalize",
-		Short: "Finalize Cluster Replication",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
-
-			finalizeOptions := finalizeRequest{
-				IgnoreHistoryLost: ignoreHistoryLost,
-			}
-
-			return NewClient(port).Finalize(cmd.Context(), finalizeOptions)
-		},
-	}
-
-	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
-	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
-
-	pauseCmd := &cobra.Command{
-		Use:   "pause",
-		Short: "Pause Cluster Replication",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return NewClient(port).Pause(cmd.Context())
-		},
-	}
-
-	resumeCmd := &cobra.Command{
-		Use:   "resume",
-		Short: "Resume Cluster Replication",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return NewClient(port).Resume(cmd.Context())
-		},
-	}
-
-	resetCmd := &cobra.Command{
-		Use:    "reset",
-		Short:  "Reset MongoLink state",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI, _ := cmd.Flags().GetString("target")
-			if targetURI == "" {
-				targetURI = os.Getenv("PML_TARGET_URI")
-			}
-			if targetURI == "" {
-				return errors.New("required flag --target not set")
-			}
-
+		if ok, _ := cmd.Flags().GetBool("reset-state"); ok {
 			err := resetState(cmd.Context(), targetURI)
 			if err != nil {
 				return err
 			}
 
-			log.New("cli").Info("OK: reset all")
+			log.New("cli").Info("State has been reset")
+		}
 
-			return nil
-		},
-	}
+		return runServer(cmd.Context(), port, sourceURI, targetURI)
+	},
+}
 
-	resetRecoveryCmd := &cobra.Command{
-		Use:   "recovery",
-		Short: "Reset recovery state",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI, _ := cmd.InheritedFlags().GetString("target")
-			if targetURI == "" {
-				targetURI = os.Getenv("PML_TARGET_URI")
-			}
-			if targetURI == "" {
-				return errors.New("required flag --target not set")
-			}
+//nolint:gochecknoglobals
+var statusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Get the status of the replication process",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
 
-			ctx := cmd.Context()
+		return NewClient(port).Status(cmd.Context())
+	},
+}
 
-			target, err := topo.Connect(ctx, targetURI)
+//nolint:gochecknoglobals
+var startCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start Cluster Replication",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+		pauseOnInitialSync, _ := cmd.Flags().GetBool("pause-on-initial-sync")
+
+		startOptions := startRequest{
+			PauseOnInitialSync: pauseOnInitialSync,
+		}
+
+		return NewClient(port).Start(cmd.Context(), startOptions)
+	},
+}
+
+//nolint:gochecknoglobals
+var finalizeCmd = &cobra.Command{
+	Use:   "finalize",
+	Short: "Finalize Cluster Replication",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+		ignoreHistoryLost, _ := cmd.Flags().GetBool("ignore-history-lost")
+
+		finalizeOptions := finalizeRequest{
+			IgnoreHistoryLost: ignoreHistoryLost,
+		}
+
+		return NewClient(port).Finalize(cmd.Context(), finalizeOptions)
+	},
+}
+
+//nolint:gochecknoglobals
+var pauseCmd = &cobra.Command{
+	Use:   "pause",
+	Short: "Pause Cluster Replication",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+
+		return NewClient(port).Pause(cmd.Context())
+	},
+}
+
+//nolint:gochecknoglobals
+var resumeCmd = &cobra.Command{
+	Use:   "resume",
+	Short: "Resume Cluster Replication",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		port, _ := cmd.Flags().GetString("port")
+
+		return NewClient(port).Resume(cmd.Context())
+	},
+}
+
+//nolint:gochecknoglobals
+var resetCmd = &cobra.Command{
+	Use:    "reset",
+	Short:  "Reset MongoLink state",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		targetURI, _ := cmd.Flags().GetString("target")
+		if targetURI == "" {
+			targetURI = os.Getenv("PML_TARGET_URI")
+		}
+		if targetURI == "" {
+			return errors.New("required flag --target not set")
+		}
+
+		err := resetState(cmd.Context(), targetURI)
+		if err != nil {
+			return err
+		}
+
+		log.New("cli").Info("OK: reset all")
+
+		return nil
+	},
+}
+
+//nolint:gochecknoglobals
+var resetRecoveryCmd = &cobra.Command{
+	Use:   "recovery",
+	Short: "Reset recovery state",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		targetURI, _ := cmd.InheritedFlags().GetString("target")
+		if targetURI == "" {
+			targetURI = os.Getenv("PML_TARGET_URI")
+		}
+		if targetURI == "" {
+			return errors.New("required flag --target not set")
+		}
+
+		ctx := cmd.Context()
+
+		target, err := topo.Connect(ctx, targetURI)
+		if err != nil {
+			return errors.Wrap(err, "connect")
+		}
+
+		defer func() {
+			err := target.Disconnect(ctx)
 			if err != nil {
-				return errors.Wrap(err, "connect")
+				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 			}
+		}()
 
-			defer func() {
-				err := target.Disconnect(ctx)
-				if err != nil {
-					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
-				}
-			}()
+		err = ClearRecoveryData(ctx, target)
+		if err != nil {
+			return err
+		}
 
-			err = ClearRecoveryData(ctx, target)
+		log.New("cli").Info("OK: reset recovery")
+
+		return nil
+	},
+}
+
+//nolint:gochecknoglobals
+var resetHeartbeatCmd = &cobra.Command{
+	Use:   "heartbeat",
+	Short: "Reset heartbeat state",
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		targetURI, _ := cmd.InheritedFlags().GetString("target")
+		if targetURI == "" {
+			targetURI = os.Getenv("PML_TARGET_URI")
+		}
+		if targetURI == "" {
+			return errors.New("required flag --target not set")
+		}
+
+		ctx := cmd.Context()
+
+		target, err := topo.Connect(ctx, targetURI)
+		if err != nil {
+			return errors.Wrap(err, "connect")
+		}
+
+		defer func() {
+			err := target.Disconnect(ctx)
 			if err != nil {
-				return err
+				log.Ctx(ctx).Warn("Disconnect: " + err.Error())
 			}
+		}()
 
-			log.New("cli").Info("OK: reset recovery")
+		err = DeleteHeartbeat(ctx, target)
+		if err != nil {
+			return err
+		}
 
-			return nil
-		},
-	}
+		log.New("cli").Info("OK: reset heartbeat")
 
-	resetHeartbeatCmd := &cobra.Command{
-		Use:   "heartbeat",
-		Short: "Reset heartbeat state",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			targetURI, _ := cmd.InheritedFlags().GetString("target")
-			if targetURI == "" {
-				targetURI = os.Getenv("PML_TARGET_URI")
-			}
-			if targetURI == "" {
-				return errors.New("required flag --target not set")
-			}
+		return nil
+	},
+}
 
-			ctx := cmd.Context()
+func main() {
+	rootCmd.PersistentFlags().String("log-level", "info", "Log level")
+	rootCmd.PersistentFlags().Bool("log-json", false, "Output log in JSON format")
+	rootCmd.PersistentFlags().Bool("no-color", false, "Disable log color")
 
-			target, err := topo.Connect(ctx, targetURI)
-			if err != nil {
-				return errors.Wrap(err, "connect")
-			}
+	rootCmd.Flags().String("port", "2242", "Port number")
+	rootCmd.Flags().String("source", "", "MongoDB connection string for the source")
+	rootCmd.Flags().String("target", "", "MongoDB connection string for the target")
+	rootCmd.Flags().Bool("reset-state", false, "Reset stored MongoLink state")
+	rootCmd.Flags().MarkHidden("reset-state") //nolint:errcheck
 
-			defer func() {
-				err := target.Disconnect(ctx)
-				if err != nil {
-					log.Ctx(ctx).Warn("Disconnect: " + err.Error())
-				}
-			}()
+	startCmd.Flags().Bool("pause-on-initial-sync", false, "Pause on Initial Sync")
+	startCmd.Flags().MarkHidden("pause-on-initial-sync") //nolint:errcheck
 
-			err = DeleteHeartbeat(ctx, target)
-			if err != nil {
-				return err
-			}
-
-			log.New("cli").Info("OK: reset heartbeat")
-
-			return nil
-		},
-	}
+	finalizeCmd.Flags().Bool("ignore-history-lost", false, "Ignore history lost error")
+	finalizeCmd.Flags().MarkHidden("ignore-history-lost") //nolint:errcheck
 
 	resetCmd.Flags().String("target", "", "MongoDB connection string for the target")
 
@@ -396,7 +408,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	}()
 
-	lg.Debug("Connected to source cluster")
+	cs, _ := connstring.Parse(sourceURI)
+	lg.Infof("Connected to source cluster: %s://%s:***@%s",
+		cs.Scheme, cs.Username, strings.Join(cs.Hosts, ","))
 
 	target, err := topo.Connect(ctx, targetURI)
 	if err != nil {
@@ -414,7 +428,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		}
 	}()
 
-	lg.Debug("Connected to target cluster")
+	cs, _ = connstring.Parse(targetURI)
+	lg.Infof("Connected to target cluster: %s://%s:***@%s",
+		cs.Scheme, cs.Username, strings.Join(cs.Hosts, ","))
 
 	stopHeartbeat, err := RunHeartbeat(ctx, target)
 	if err != nil {
