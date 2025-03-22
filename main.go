@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -22,6 +24,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/mongolink"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -481,6 +484,9 @@ type server struct {
 	mlink *mongolink.MongoLink
 	// stopHeartbeat stops the heartbeat process in the application.
 	stopHeartbeat StopHeartbeat
+
+	// promRegistry is the Prometheus registry for metrics.
+	promRegistry *prometheus.Registry
 }
 
 // createServer creates a new server with the given options.
@@ -532,6 +538,9 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		return nil, errors.Wrap(err, "heartbeat")
 	}
 
+	promRegistry := prometheus.NewRegistry()
+	metrics.Init(promRegistry)
+
 	mlink := mongolink.New(source, target)
 
 	err = Restore(ctx, target, mlink)
@@ -546,6 +555,7 @@ func createServer(ctx context.Context, sourceURI, targetURI string) (*server, er
 		targetCluster: target,
 		mlink:         mlink,
 		stopHeartbeat: stopHeartbeat,
+		promRegistry:  promRegistry,
 	}
 
 	return s, nil
@@ -569,9 +579,14 @@ func (s *server) Handler() http.Handler {
 	mux.HandleFunc("/finalize", s.handleFinalize)
 	mux.HandleFunc("/pause", s.handlePause)
 	mux.HandleFunc("/resume", s.handleResume)
+	mux.Handle("/metrics", s.handleMetrics())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.New("http").Info(r.Method + " " + r.URL.String())
+		if r.URL.Path == "/metrics" {
+			log.New("http").Debug(r.Method + " " + r.URL.String())
+		} else {
+			log.New("http").Info(r.Method + " " + r.URL.String())
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -826,6 +841,10 @@ func (s *server) handleResume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeResponse(w, resumeResponse{Ok: true})
+}
+
+func (s *server) handleMetrics() http.Handler {
+	return promhttp.HandlerFor(s.promRegistry, promhttp.HandlerOpts{})
 }
 
 // writeResponse writes the response as JSON to the ResponseWriter.

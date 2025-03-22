@@ -15,6 +15,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -253,6 +254,7 @@ func (c *Clone) run() error {
 
 	c.lock.Lock()
 	c.totalSize = totalSize
+	metrics.SetEstimatedTotalSize(totalSize)
 	c.lock.Unlock()
 
 	grp, grpCtx := errgroup.WithContext(ctx)
@@ -427,6 +429,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 			}
 
 			c.clonedSize.Add(int64(batchSize))
+			metrics.AddCopiedSize(batchSize)
 
 			lg.Unwrap().Trace().
 				Int("count", len(docs)).
@@ -454,6 +457,7 @@ func (c *Clone) cloneCollection(ctx context.Context, db, coll string) error {
 		}
 
 		c.clonedSize.Add(int64(batchSize))
+		metrics.AddCopiedSize(batchSize)
 
 		lg.Unwrap().Trace().
 			Int("count", len(docs)).

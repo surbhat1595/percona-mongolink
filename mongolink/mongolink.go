@@ -11,6 +11,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -314,6 +315,8 @@ func (ml *MongoLink) run() {
 		err := ml.clone.Start(ctx)
 		if err != nil {
 			ml.setFailed(errors.Wrap(cloneStatus.Err, "start clone"))
+
+			return
 		}
 
 		<-ml.clone.Done()
@@ -407,8 +410,9 @@ func (ml *MongoLink) monitorInitialSync(ctx context.Context) {
 			return
 		}
 
-		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d",
-			cloneStatus.FinishTS.T-replStatus.LastReplicatedOpTime.T)
+		lagTime := max(int64(cloneStatus.FinishTS.T)-int64(replStatus.LastReplicatedOpTime.T), 0)
+		lg.Debugf("Remaining logical seconds until Initial Sync completed: %d", lagTime)
+		metrics.SetInitialSyncLagTimeSeconds(lagTime)
 	}
 }
 
@@ -434,7 +438,9 @@ func (ml *MongoLink) monitorLagTime(ctx context.Context) {
 		}
 
 		lastTS := ml.repl.Status().LastReplicatedOpTime
-		lg.Infof("Lag Time: %d", max(sourceTS.T-lastTS.T, 0))
+		l := max(sourceTS.T-lastTS.T, 0)
+		lg.Infof("Lag Time: %d", l)
+		metrics.SetLagTimeSeconds(l)
 	}
 }
 

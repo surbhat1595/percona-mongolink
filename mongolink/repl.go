@@ -13,6 +13,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
 )
@@ -444,6 +445,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
+				metrics.AddEventsProcessed(1)
 				r.lock.Unlock()
 			}
 
@@ -455,6 +457,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 				r.lock.Lock()
 				r.lastReplicatedOpTime = change.ClusterTime
 				r.eventsProcessed++
+				metrics.AddEventsProcessed(1)
 				r.lock.Unlock()
 			}
 
@@ -503,6 +506,7 @@ func (r *Repl) run(opts *options.ChangeStreamOptionsBuilder) {
 			r.lock.Lock()
 			r.lastReplicatedOpTime = change.ClusterTime
 			r.eventsProcessed++
+			metrics.AddEventsProcessed(1)
 			r.lock.Unlock()
 		}
 
@@ -533,6 +537,7 @@ func (r *Repl) doBulkOps(ctx context.Context) bool {
 	r.lock.Lock()
 	r.lastReplicatedOpTime = r.bulkTS
 	r.eventsProcessed += int64(size)
+	metrics.AddEventsProcessed(size)
 	r.lock.Unlock()
 
 	log.New("bulk:write").
