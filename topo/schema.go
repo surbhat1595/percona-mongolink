@@ -9,7 +9,15 @@ import (
 	"github.com/percona-lab/percona-mongolink/errors"
 )
 
-type CollectionSpecification mongo.CollectionSpecification
+type CollectionSpecification = mongo.CollectionSpecification
+
+type CollectionType string
+
+const (
+	TypeCollection = "collection"
+	TypeTimeseries = "timeseries"
+	TypeView       = "view"
+)
 
 // IndexSpecification contains all index options.
 //
@@ -63,6 +71,17 @@ func ListCollectionNames(ctx context.Context, m *mongo.Client, dbName string) ([
 
 var ErrNotFound = errors.New("not found")
 
+// ListCollectionSpecs retrieves the specifications of collections.
+func ListCollectionSpecs(
+	ctx context.Context,
+	m *mongo.Client,
+	dbName string,
+) ([]CollectionSpecification, error) {
+	//nolint:wrapcheck
+	return m.Database(dbName).ListCollectionSpecifications(ctx,
+		bson.D{{"name", bson.D{{"$not", bson.D{{"$regex", "^system\\."}}}}}})
+}
+
 // GetCollectionSpec retrieves the specification of a collection.
 func GetCollectionSpec(
 	ctx context.Context,
@@ -72,6 +91,10 @@ func GetCollectionSpec(
 ) (*CollectionSpecification, error) {
 	colls, err := m.Database(dbName).ListCollectionSpecifications(ctx, bson.D{{"name", collName}})
 	if err != nil {
+		if IsNamespaceNotFound(err) {
+			err = ErrNotFound
+		}
+
 		return nil, err //nolint:wrapcheck
 	}
 
@@ -79,9 +102,9 @@ func GetCollectionSpec(
 		return nil, ErrNotFound
 	}
 
-	coll := CollectionSpecification(colls[0]) // copy to release the slice memory
+	coll := colls[0] // copy to release the slice memory
 
-	return &coll, err //nolint:wrapcheck
+	return &coll, nil
 }
 
 func ListIndexes(

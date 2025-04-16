@@ -2,20 +2,36 @@ package topo
 
 import (
 	"context"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
 )
 
+type ConnectOptions struct {
+	Compressors []string
+}
+
 // Connect establishes a connection to a MongoDB instance using the provided URI.
 // If the URI is empty, it returns an error.
 func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
+	return ConnectWithOptions(ctx, uri, &ConnectOptions{})
+}
+
+// Connect establishes a connection to a MongoDB instance using the provided URI and options.
+// If the URI is empty, it returns an error.
+func ConnectWithOptions(
+	ctx context.Context,
+	uri string,
+	connOpts *ConnectOptions,
+) (*mongo.Client, error) {
 	if uri == "" {
 		return nil, errors.New("invalid MongoDB URI")
 	}
@@ -26,7 +42,13 @@ func Connect(ctx context.Context, uri string) (*mongo.Client, error) {
 				SetStrict(false).
 				SetDeprecationErrors(true)).
 		SetReadPreference(readpref.Primary()).
-		SetReadConcern(readconcern.Majority())
+		SetReadConcern(readconcern.Majority()).
+		SetWriteConcern(writeconcern.Majority()).
+		SetTimeout(time.Minute)
+
+	if connOpts != nil && connOpts.Compressors != nil {
+		opts.SetCompressors(connOpts.Compressors)
+	}
 
 	if config.MongoLogEnabled {
 		opts = opts.SetLoggerOptions(options.Logger().
