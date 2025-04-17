@@ -16,6 +16,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/metrics"
 	"github.com/percona-lab/percona-mongolink/sel"
 	"github.com/percona-lab/percona-mongolink/topo"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
 var (
@@ -320,7 +321,8 @@ func (r *Repl) watchChangeEvents(
 	}
 
 	defer func() {
-		if err := cur.Close(context.Background()); err != nil {
+		err := util.CtxWithTimeout(context.Background(), config.CloseCursorTimeout, cur.Close)
+		if err != nil {
 			log.New("repl:watch").Error(err, "Close change stream cursor")
 		}
 	}()

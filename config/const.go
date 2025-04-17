@@ -38,6 +38,12 @@ const (
 	HeartbeatTimeout = 5 * time.Second
 	// StaleHeartbeatDuration is the duration after which a heartbeat is considered stale.
 	StaleHeartbeatDuration = HeartbeatInternal + HeartbeatTimeout
+	// PingTimeout is the timeout duration for initial ping.
+	PingTimeout = 10 * time.Second
+	// DisconnectTimeout is the timeout duration for connection disconnection and close server.
+	DisconnectTimeout = 5 * time.Second
+	// CloseCursorTimeout is the timeout duration for closing cursor.
+	CloseCursorTimeout = 10 * time.Second
 )
 
 // Change stream and replication settings.

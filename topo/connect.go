@@ -13,6 +13,7 @@ import (
 	"github.com/percona-lab/percona-mongolink/config"
 	"github.com/percona-lab/percona-mongolink/errors"
 	"github.com/percona-lab/percona-mongolink/log"
+	"github.com/percona-lab/percona-mongolink/util"
 )
 
 type ConnectOptions struct {
@@ -61,9 +62,12 @@ func ConnectWithOptions(
 		return nil, err //nolint:wrapcheck
 	}
 
-	err = conn.Ping(ctx, nil)
+	err = util.CtxWithTimeout(ctx, config.PingTimeout, func(ctx context.Context) error {
+		return conn.Ping(ctx, nil)
+	})
 	if err != nil {
-		if err1 := conn.Disconnect(ctx); err1 != nil {
+		err1 := util.CtxWithTimeout(ctx, config.DisconnectTimeout, conn.Disconnect)
+		if err1 != nil {
 			log.Ctx(ctx).Warn("Disconnect: " + err1.Error())
 		}
 
