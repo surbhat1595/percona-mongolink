@@ -174,6 +174,16 @@ def test_drop_created(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
+def test_drop_non_existing_index(t: Testing):
+    t.source["db_0"]["coll_0"].create_index([("i", 1)])
+
+    with t.run(phase=Runner.Phase.APPLY):
+        t.target["db_0"]["coll_0"].drop_index([("i", 1)])
+        t.source["db_0"]["coll_0"].drop_index([("i", 1)])
+
+    t.compare_all()
+
+
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_hide(t: Testing, phase: Runner.Phase):
     index_name = t.source["db_1"]["coll_1"].create_index({"i": 1})
@@ -483,9 +493,21 @@ def test_continue_creating_indexes_if_some_fail(t: Testing, phase: Runner.Phase)
     with t.run(phase):
         t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, name="idx_1")
         t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, unique=True, name="idx_2")
-        t.source["db_1"]["coll_1"].create_index({"i": 1, "j": 1}, collation={"locale": "en_US"}, name="idx_3")
+        t.source["db_1"]["coll_1"].create_index(
+            {"i": 1, "j": 1},
+            collation={"locale": "en_US"},
+            name="idx_3",
+        )
 
     target_idx_count = len(t.target["db_1"]["coll_1"].index_information())
     source_idx_count = len(t.source["db_1"]["coll_1"].index_information())
 
     assert source_idx_count - 1 == target_idx_count
+
+
+def test_pml_95_drop_index_for_non_existing_namespace(t: Testing):
+    t.source["db_0"]["coll_0"].create_index([("i", 1)])
+
+    with t.run(phase=Runner.Phase.APPLY):
+        t.target["db_0"]["coll_0"].drop()
+        t.source["db_0"]["coll_0"].drop_index([("i", 1)])
