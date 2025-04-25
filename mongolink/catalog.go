@@ -209,6 +209,7 @@ func (c *Catalog) doCreateCollection(
 	if err != nil {
 		return errors.Wrap(err, "create collection")
 	}
+	log.Ctx(ctx).Debugf("Created collection %s.%s", db, coll)
 
 	c.addCollectionToCatalog(ctx, db, coll)
 
@@ -237,6 +238,8 @@ func (c *Catalog) doCreateView(
 		return errors.Wrap(err, "create view")
 	}
 
+	log.Ctx(ctx).Debugf("Created view %s.%s", db, view)
+
 	return nil
 }
 
@@ -249,8 +252,9 @@ func (c *Catalog) DropCollection(ctx context.Context, db, coll string) error {
 	if err != nil {
 		return err //nolint:wrapcheck
 	}
+	log.Ctx(ctx).Debugf("Dropped collection %s.%s", db, coll)
 
-	c.deleteCollectionFromCatalog(db, coll)
+	c.deleteCollectionFromCatalog(ctx, db, coll)
 
 	return nil
 }
@@ -276,13 +280,15 @@ func (c *Catalog) DropDatabase(ctx context.Context, db string) error {
 				return errors.Wrapf(err, "drop namespace %s.%s", db, coll)
 			}
 
-			lg.Debugf("Dropped %s.%s", db, coll)
+			lg.Debugf("Dropped collection %s.%s", db, coll)
 
 			return nil
 		})
 	}
 
-	c.deleteDatabaseFromCatalog(db)
+	lg.Debugf("Dropped database %s", db)
+
+	c.deleteDatabaseFromCatalog(ctx, db)
 
 	return eg.Wait() //nolint:wrapcheck
 }
@@ -348,23 +354,46 @@ func (c *Catalog) CreateIndexes(
 		return nil
 	}
 
+	processedIdxs := make(map[string]error, len(idxs))
+
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
-	res := c.target.Database(db).RunCommand(ctx, bson.D{
-		{"createIndexes", coll},
-		{"indexes", idxs},
-	})
-	if err := res.Err(); err != nil {
-		if topo.IsIndexOptionsConflict(err) {
-			lg.Error(err, "")
+	for _, index := range idxs {
+		res := c.target.Database(db).RunCommand(ctx, bson.D{
+			{"createIndexes", coll},
+			{"indexes", bson.A{index}},
+		})
 
-			return nil
+		if err := res.Err(); err != nil {
+			processedIdxs[index.Name] = err
+
+			continue
 		}
 
-		return err //nolint:wrapcheck
+		processedIdxs[index.Name] = nil
 	}
 
-	c.addIndexesToCatalog(ctx, db, coll, indexes)
+	succesfulIdxs := make([]*topo.IndexSpecification, 0, len(processedIdxs))
+	successfulIdxNames := make([]string, 0, len(processedIdxs))
+	var idxErrors []error
+
+	for _, idx := range indexes {
+		if err := processedIdxs[idx.Name]; err != nil {
+			idxErrors = append(idxErrors, errors.Wrap(err, "create index: "+idx.Name))
+
+			continue
+		}
+
+		succesfulIdxs = append(succesfulIdxs, idx)
+		successfulIdxNames = append(successfulIdxNames, idx.Name)
+	}
+
+	lg.Debugf("Created indexes on %s.%s: %s", db, coll, strings.Join(successfulIdxNames, ", "))
+	c.addIndexesToCatalog(ctx, db, coll, succesfulIdxs)
+
+	if len(idxErrors) > 0 {
+		lg.Errorf(errors.Join(idxErrors...), "One or more indexes failed to create on %s.%s", db, coll)
+	}
 
 	return nil
 }
@@ -507,6 +536,8 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	lg := log.Ctx(ctx)
+
 	opts := bson.D{
 		{"renameCollection", db + "." + coll},
 		{"to", targetDB + "." + targetColl},
@@ -516,13 +547,14 @@ func (c *Catalog) Rename(ctx context.Context, db, coll, targetDB, targetColl str
 	err := c.target.Database("admin").RunCommand(ctx, opts).Err()
 	if err != nil {
 		if topo.IsNamespaceNotFound(err) {
-			log.Ctx(ctx).Errorf(err, "")
+			lg.Errorf(err, "")
 
 			return nil
 		}
 
 		return errors.Wrap(err, "rename collection")
 	}
+	lg.Debugf("Renamed collection %s.%s to %s.%s", db, coll, targetDB, targetColl)
 
 	c.renameCollectionInCatalog(ctx, db, coll, targetDB, targetColl)
 
@@ -534,14 +566,18 @@ func (c *Catalog) DropIndex(ctx context.Context, db, coll, index string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	lg := log.Ctx(ctx)
+
 	err := c.target.Database(db).Collection(coll).Indexes().DropOne(ctx, index)
 	if err != nil {
 		if !topo.IsIndexNotFound(err) {
 			return err //nolint:wrapcheck
 		}
 
-		log.Ctx(ctx).Warn(err.Error())
+		lg.Warn(err.Error())
 	}
+
+	lg.Debugf("Dropped index %s.%s.%s", db, coll, index)
 
 	c.removeIndexFromCatalog(ctx, db, coll, index)
 
@@ -552,16 +588,18 @@ func (c *Catalog) SetCollectionTimestamp(ctx context.Context, db, coll string, t
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	lg := log.Ctx(ctx)
+
 	databaseEntry, ok := c.Databases[db]
 	if !ok {
-		log.Ctx(ctx).Warnf("Catalog: set collection ts: database %q is not found", db)
+		lg.Warnf("set collection ts: database %q is not found", db)
 
 		return
 	}
 
 	collectionEntry, ok := databaseEntry.Collections[coll]
 	if !ok {
-		log.Ctx(ctx).Warnf("Catalog: set collection ts: namespace %q is not found", db+"."+coll)
+		lg.Warnf("set collection ts: namespace %q is not found", db+"."+coll)
 
 		return
 	}
@@ -577,6 +615,8 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	defer c.lock.RUnlock()
 
 	lg := log.Ctx(ctx)
+
+	var idxErrors []error
 
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
@@ -594,14 +634,20 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
-						return errors.Wrap(err, "convert to unique: prepareUnique: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+
+						continue
 					}
 
 					lg.Info("Convert prepareUnique index to unique: " + index.Name)
 
 					err = c.doModifyIndexOption(ctx, db, coll, index.Name, "unique", true)
 					if err != nil {
-						return errors.Wrap(err, "convert to unique: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "convert to unique: "+index.Name))
+
+						continue
 					}
 
 				case index.PrepareUnique != nil && *index.PrepareUnique:
@@ -609,7 +655,10 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "prepareUnique", true)
 					if err != nil {
-						return errors.Wrap(err, "convert to prepareUnique: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "convert to prepareUnique: "+index.Name))
+
+						continue
 					}
 				}
 
@@ -619,7 +668,10 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 					err := c.doModifyIndexOption(ctx,
 						db, coll, index.Name, "expireAfterSeconds", *index.ExpireAfterSeconds)
 					if err != nil {
-						return errors.Wrap(err, "modify expireAfterSeconds: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "modify expireAfterSeconds: "+index.Name))
+
+						continue
 					}
 				}
 
@@ -628,11 +680,18 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 
 					err := c.doModifyIndexOption(ctx, db, coll, index.Name, "hidden", index.Hidden)
 					if err != nil {
-						return errors.Wrap(err, "modify hidden: "+index.Name)
+						idxErrors = append(idxErrors,
+							errors.Wrap(err, "modify hidden: "+index.Name))
+
+						continue
 					}
 				}
 			}
 		}
+	}
+
+	if len(idxErrors) > 0 {
+		lg.Errorf(errors.Join(idxErrors...), "Finalize indexes")
 	}
 
 	return nil
@@ -686,9 +745,11 @@ func (c *Catalog) addIndexesToCatalog(
 	coll string,
 	indexes []*topo.IndexSpecification,
 ) {
+	lg := log.Ctx(ctx)
+
 	dbCat, ok := c.Databases[db]
 	if !ok {
-		log.Ctx(ctx).Errorf(nil, "Catalog: add indexes: database %q not found", db)
+		lg.Errorf(nil, "add indexes: database %q not found", db)
 
 		c.Databases[db] = databaseCatalog{
 			Collections: map[string]collectionCatalog{
@@ -703,7 +764,7 @@ func (c *Catalog) addIndexesToCatalog(
 
 	collCat, ok := dbCat.Collections[coll]
 	if !ok {
-		log.Ctx(ctx).Errorf(nil, "Catalog: add indexes: namespace %q not found", db+"."+coll)
+		lg.Errorf(nil, "add indexes: namespace %q not found", db+"."+coll)
 
 		dbCat.Collections[coll] = collectionCatalog{
 			Indexes: slices.Clone(indexes),
@@ -713,14 +774,13 @@ func (c *Catalog) addIndexesToCatalog(
 		return
 	}
 
+	idxNames := make([]string, 0, len(collCat.Indexes))
 	for _, index := range indexes {
 		found := false
 
 		for i, catIndex := range collCat.Indexes {
 			if catIndex.Name == index.Name {
-				log.Ctx(ctx).
-					Warnf("Catalog: add indexes: index %q already exists in %q namespace",
-						index.Name, db+"."+coll)
+				lg.Warnf("add indexes: index %q already exists in %q namespace", index.Name, db+"."+coll)
 
 				collCat.Indexes[i] = index
 				found = true
@@ -731,31 +791,35 @@ func (c *Catalog) addIndexesToCatalog(
 
 		if !found {
 			collCat.Indexes = append(collCat.Indexes, index)
+			idxNames = append(idxNames, index.Name)
 		}
 	}
 
 	dbCat.Collections[coll] = collCat
 	c.Databases[db] = dbCat
+	lg.Debugf("Indexes added to catalog on %s.%s: , %s", db, coll, strings.Join(idxNames, ", "))
 }
 
 // removeIndexFromCatalog removes an index from the catalog.
 func (c *Catalog) removeIndexFromCatalog(ctx context.Context, db, coll, index string) {
+	lg := log.Ctx(ctx)
+
 	databaseEntry, ok := c.Databases[db]
 	if !ok {
-		log.Ctx(ctx).Warnf("Catalog: remove index: database %q is not found", db)
+		lg.Warnf("remove index: database %q is not found", db)
 
 		return
 	}
 
 	collectionEntry, ok := databaseEntry.Collections[coll]
 	if !ok {
-		log.Ctx(ctx).Warnf("Catalog: remove index: namespace %q is not found", db+"."+coll)
+		lg.Warnf("remove index: namespace %q is not found", db+"."+coll)
 
 		return
 	}
 
 	if len(collectionEntry.Indexes) == 0 {
-		log.Ctx(ctx).Warnf("Catalog: remove index: no indexes for namespace %q", db+"."+coll)
+		lg.Warnf("remove index: no indexes for namespace %q", db+"."+coll)
 
 		return
 	}
@@ -765,6 +829,8 @@ func (c *Catalog) removeIndexFromCatalog(ctx context.Context, db, coll, index st
 	if len(indexes) == 1 && indexes[0].Name == index {
 		collectionEntry.Indexes = nil
 
+		lg.Debugf("Indexes removed from catalog %s.%s", db, coll)
+
 		return
 	}
 
@@ -773,16 +839,19 @@ func (c *Catalog) removeIndexFromCatalog(ctx context.Context, db, coll, index st
 			copy(indexes[i:], indexes[i+1:])
 			collectionEntry.Indexes = indexes[:len(indexes)-2]
 
+			lg.Debugf("Indexes removed from catalog %s.%s", db, coll)
+
 			return
 		}
 	}
 
-	log.Ctx(ctx).
-		Warnf("Catalog: remove index: index %q not found in namespace %q", index, db+"."+coll)
+	lg.Warnf("remove index: index %q not found in namespace %q", index, db+"."+coll)
 }
 
 // addCollectionToCatalog adds a collection to the catalog.
 func (c *Catalog) addCollectionToCatalog(ctx context.Context, db, coll string) {
+	lg := log.Ctx(ctx)
+
 	dbCat, ok := c.Databases[db]
 	if !ok {
 		dbCat = databaseCatalog{
@@ -791,18 +860,18 @@ func (c *Catalog) addCollectionToCatalog(ctx context.Context, db, coll string) {
 	}
 
 	if _, ok = dbCat.Collections[coll]; ok {
-		log.Ctx(ctx).
-			Errorf(nil, "Catalog: add collection: namespace %q already exists", db+"."+coll)
+		lg.Errorf(nil, "add collection: namespace %q already exists", db+"."+coll)
 
 		return
 	}
 
 	dbCat.Collections[coll] = collectionCatalog{}
 	c.Databases[db] = dbCat
+	lg.Debugf("Collection added to catalog %s.%s", db, coll)
 }
 
 // deleteCollectionFromCatalog deletes a collection entry from the catalog.
-func (c *Catalog) deleteCollectionFromCatalog(db, coll string) {
+func (c *Catalog) deleteCollectionFromCatalog(ctx context.Context, db, coll string) {
 	databaseEntry, ok := c.Databases[db]
 	if !ok {
 		return
@@ -812,10 +881,12 @@ func (c *Catalog) deleteCollectionFromCatalog(db, coll string) {
 	if len(databaseEntry.Collections) == 0 {
 		delete(c.Databases, db)
 	}
+	log.Ctx(ctx).Debugf("Collection deleted from catalog %s.%s", db, coll)
 }
 
-func (c *Catalog) deleteDatabaseFromCatalog(db string) {
+func (c *Catalog) deleteDatabaseFromCatalog(ctx context.Context, db string) {
 	delete(c.Databases, db)
+	log.Ctx(ctx).Debugf("Database deleted from catalog %s", db)
 }
 
 func (c *Catalog) renameCollectionInCatalog(
@@ -825,22 +896,24 @@ func (c *Catalog) renameCollectionInCatalog(
 	targetDB string,
 	targetColl string,
 ) {
+	lg := log.Ctx(ctx)
+
 	databaseEntry, ok := c.Databases[db]
 	if !ok {
-		log.Ctx(ctx).Errorf(nil, "Catalog: rename collection: database %q is not found", db)
+		lg.Errorf(nil, "rename collection: database %q is not found", db)
 
 		return
 	}
 
 	collectionEntry, ok := databaseEntry.Collections[coll]
 	if !ok {
-		log.Ctx(ctx).
-			Errorf(nil, "Catalog: rename collection: namespace %q is not found", db+"."+coll)
+		lg.Errorf(nil, "rename collection: namespace %q is not found", db+"."+coll)
 
 		return
 	}
 
 	c.addCollectionToCatalog(ctx, targetDB, targetColl)
 	c.Databases[targetDB].Collections[targetColl] = collectionEntry
-	c.deleteCollectionFromCatalog(db, coll)
+	c.deleteCollectionFromCatalog(ctx, db, coll)
+	lg.Debugf("Collection renamed in catalog %s.%s to %s.%s", db, coll, targetDB, targetColl)
 }
