@@ -282,20 +282,22 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 	copyLogger := log.Ctx(ctx)
 
 	copyManager := NewCopyManager(c.source, c.target, CopyManagerOptions{
-		NumParallelCollections: config.CloneNumParallelCollections(),
-		NumReadWorkers:         config.CloneNumReadWorkers(),
-		NumInsertWorkers:       config.CloneNumInsertWorkers(),
-		SegmentSizeBytes:       config.CloneSegmentSizeBytes(),
-		ReadBatchSizeBytes:     config.CloneReadBatchSizeBytes(),
+		NumReadWorkers:     config.CloneNumReadWorkers(),
+		NumInsertWorkers:   config.CloneNumInsertWorkers(),
+		SegmentSizeBytes:   config.CloneSegmentSizeBytes(),
+		ReadBatchSizeBytes: config.CloneReadBatchSizeBytes(),
 	})
 	defer copyManager.Close()
 
+	numParallelCollections := config.CloneNumParallelCollections()
+	if numParallelCollections < 1 {
+		numParallelCollections = config.DefaultCloneNumParallelCollection
+	}
+
 	eg, grpCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(numParallelCollections)
 
-	sem := make(chan struct{}, 1) // ensure ns is put to queue in order
 	for _, ns := range namespaces {
-		sem <- struct{}{}
-
 		eg.Go(func() error {
 			nsCtx, cancel := context.WithCancel(grpCtx)
 			defer cancel()
@@ -320,8 +322,6 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 
 			updateC := copyManager.Do(nsCtx, ns,
 				func(ctx context.Context) (*topo.CollectionSpecification, error) {
-					<-sem
-
 					startedAt = time.Now()
 
 					capturedAt, err := topo.ClusterTime(ctx, c.source)
@@ -339,7 +339,7 @@ func (c *Clone) doClone(ctx context.Context, namespaces []Namespace) error {
 					}
 
 					if spec.Type == topo.TypeTimeseries {
-						return spec, nil
+						return spec, ErrTimeseriesUnsupported
 					}
 
 					err = c.createCollection(ctx, ns, spec)
