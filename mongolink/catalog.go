@@ -363,15 +363,17 @@ func (c *Catalog) CreateIndexes(
 	// NOTE: [mongo.IndexView.CreateMany] uses [mongo.IndexModel]
 	// which does not support `prepareUnique`.
 	for _, index := range idxs {
-		res := c.target.Database(db).RunCommand(ctx, bson.D{
-			{"createIndexes", coll},
-			{"indexes", bson.A{index}},
-		})
+		if index.Ready() {
+			res := c.target.Database(db).RunCommand(ctx, bson.D{
+				{"createIndexes", coll},
+				{"indexes", bson.A{index}},
+			})
 
-		if err := res.Err(); err != nil {
-			processedIdxs[index.Name] = err
+			if err := res.Err(); err != nil {
+				processedIdxs[index.Name] = err
 
-			continue
+				continue
+			}
 		}
 
 		processedIdxs[index.Name] = nil
@@ -626,6 +628,13 @@ func (c *Catalog) Finalize(ctx context.Context) error {
 	for db, colls := range c.Databases {
 		for coll, collEntry := range colls.Collections {
 			for _, index := range collEntry.Indexes {
+				if !index.Ready() {
+					lg.Warnf("Index %s on %s.%s was incomplete during replication, skipping it",
+						index.Name, db, coll)
+
+					continue
+				}
+
 				if index.IsClustered() {
 					lg.Warn("Clustered index with TTL is not supported")
 
