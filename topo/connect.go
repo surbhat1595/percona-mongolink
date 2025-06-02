@@ -59,7 +59,7 @@ func ConnectWithOptions(
 		SetReadPreference(readpref.Primary()).
 		SetReadConcern(readconcern.Majority()).
 		SetWriteConcern(writeconcern.Majority()).
-		SetTimeout(time.Minute)
+		SetTimeout(5 * time.Minute)
 
 	if connOpts != nil && connOpts.Compressors != nil {
 		opts.SetCompressors(connOpts.Compressors)
