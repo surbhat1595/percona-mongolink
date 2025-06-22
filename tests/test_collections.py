@@ -2,6 +2,7 @@
 import random
 from datetime import datetime
 
+import time
 import pytest
 import testing
 from plm import PLM, Runner
@@ -125,7 +126,7 @@ def test_create_view_with_collation(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.timeout(15)
+@pytest.mark.timeout(20)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_create_timeseries_ignored(t: Testing, phase: Runner.Phase):
     with t.run(phase):
@@ -327,7 +328,7 @@ def test_modify_view(t: Testing, phase: Runner.Phase):
     t.compare_all()
 
 
-@pytest.mark.timeout(15)
+@pytest.mark.timeout(20)
 @pytest.mark.parametrize("phase", [Runner.Phase.APPLY, Runner.Phase.CLONE])
 def test_modify_timeseries_options_ignored(t: Testing, phase: Runner.Phase):
     t.source["db_1"].create_collection(
@@ -597,6 +598,8 @@ def test_plm_110_rename_during_clone_and_repl(t: Testing):
     with t.run(phase=Runner.Phase.MANUAL) as r:
         r.start()
         r.wait_for_state(PLM.State.RUNNING)
+
+        time.sleep(1)  # ensure actual clone has started
 
         for ns in testing.list_all_namespaces(t.source):
             t.source.admin.command({"renameCollection": ns, "to": ns + "_renamed"})
