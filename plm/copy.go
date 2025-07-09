@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -204,6 +205,12 @@ func (cm *CopyManager) copyCollection(
 	isCapped, _ := spec.Options.Lookup("capped").BooleanOK()
 
 	var nextSegment nextSegmentFunc
+
+	readResultC := make(chan readBatchResult)
+
+	var batchID atomic.Uint32
+	var nextID nextBatchIDFunc = func() uint32 { return batchID.Add(1) }
+
 	if isCapped { //nolint:nestif
 		segmenter, err := NewCappedSegmenter(ctx,
 			cm.source, namespace, cm.options.ReadBatchSizeBytes)
@@ -234,13 +241,14 @@ func (cm *CopyManager) copyCollection(
 		}
 
 		nextSegment = segmenter.Next
+
+		go segmenter.handleNanIDDoc(readResultC, nextID)
 	}
 
 	collectionReadCtx, stopCollectionRead := context.WithCancel(ctx)
 
 	// pendingSegments tracks in-progress read segments
 	pendingSegments := &sync.WaitGroup{}
-	readResultC := make(chan readBatchResult)
 
 	allBatchesSent := make(chan struct{}) // closes when all batches are sent to inserters
 
@@ -260,8 +268,6 @@ func (cm *CopyManager) copyCollection(
 	// spawn readSegment in loop until the collection is exhausted or canceled.
 	go func() {
 		var segmentID uint32
-		var batchID atomic.Uint32
-		var nextID nextBatchIDFunc = func() uint32 { return batchID.Add(1) }
 
 		readStopped := collectionReadCtx.Done()
 
@@ -297,6 +303,7 @@ func (cm *CopyManager) copyCollection(
 			}
 
 			pendingSegments.Add(1)
+
 			go func() {
 				defer func() {
 					<-cm.readLimit
@@ -560,6 +567,7 @@ type Segmenter struct {
 	batchSize   int32
 	keyRanges   []keyRange
 	currIDRange keyRange
+	nanDoc      bson.Raw // document with NaN _id, if any
 }
 
 type keyRange struct {
@@ -625,7 +633,7 @@ func NewSegmenter(
 
 	mcoll := m.Database(ns.Database).Collection(ns.Collection)
 
-	idKeyRange, err := getIDKeyRange(ctx, mcoll)
+	idKeyRange, nanDoc, err := getIDKeyRange(ctx, mcoll)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, errEOC // empty collection
@@ -640,29 +648,31 @@ func NewSegmenter(
 			segmentSize: segmentSize,
 			batchSize:   batchSize,
 			currIDRange: idKeyRange,
+			nanDoc:      *nanDoc,
 		}
 
 		return s, nil
 	}
 
-	keyRangeByType, err := getIDKeyRangeByType(ctx, mcoll)
+	multiTypeIDkeyRanges, err := getMultiTypeIDKeyRanges(ctx, mcoll)
 	if err != nil {
 		return nil, errors.Wrap(err, "get ID key range by type")
 	}
 
-	if len(keyRangeByType) == 0 {
+	if len(multiTypeIDkeyRanges) == 0 {
 		return nil, errEOC // empty collection
 	}
 
-	currIDRange := keyRangeByType[0]
-	keyRanges := keyRangeByType[1:]
+	currIDRange := multiTypeIDkeyRanges[0]
+	remainingKeyRanges := multiTypeIDkeyRanges[1:]
 
 	s := &Segmenter{
 		mcoll:       mcoll,
 		segmentSize: segmentSize,
 		batchSize:   batchSize,
-		keyRanges:   keyRanges,
+		keyRanges:   remainingKeyRanges,
 		currIDRange: currIDRange,
+		nanDoc:      *nanDoc,
 	}
 
 	return s, nil
@@ -770,21 +780,59 @@ func (seg *Segmenter) findSegmentMaxKey(
 	return raw.Lookup("_id"), nil
 }
 
+// handleNanIDDoc sends a document with NaN _id to the readResultC channel if it exists.
+func (seg *Segmenter) handleNanIDDoc(
+	readResults chan<- readBatchResult,
+	nextID nextBatchIDFunc,
+) {
+	if len(seg.nanDoc) == 0 {
+		return
+	}
+
+	readResults <- readBatchResult{
+		ID:        nextID(),
+		Documents: []any{seg.nanDoc},
+		SizeBytes: len(seg.nanDoc),
+	}
+}
+
 // getIDKeyRange returns the minimum and maximum _id values in the collection.
 // It uses two FindOne operations with sort directions of 1 (ascending) and -1 (descending)
 // to determine the full _id range. This is used to define the collection boundaries
 // when the _id type is uniform across all documents.
-func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, error) {
-	findOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
-	minRaw, err := mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
+func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, *bson.Raw, error) {
+	minIDOptions := options.FindOne().SetSort(bson.D{{"_id", 1}}).SetProjection(bson.D{{"_id", 1}})
+
+	minRaw, err := mcoll.FindOne(ctx, bson.D{}, minIDOptions).Raw()
 	if err != nil {
-		return keyRange{}, errors.Wrap(err, "min _id")
+		return keyRange{}, nil, errors.Wrap(err, "min _id")
 	}
 
-	findOptions = options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})
-	maxRaw, err := mcoll.FindOne(ctx, bson.D{}, findOptions).Raw()
+	nanDoc := bson.Raw{}
+
+	if strings.Contains(minRaw.Lookup("_id").DebugString(), "NaN") {
+		nanDoc = minRaw
+
+		minRaw, err = mcoll.FindOne(ctx, bson.D{}, minIDOptions.SetSkip(1)).Raw()
+		if err != nil {
+			return keyRange{}, nil, errors.Wrap(err, "min _id (skip NaN)")
+		}
+	}
+
+	maxIDOptions := options.FindOne().SetSort(bson.D{{"_id", -1}}).SetProjection(bson.D{{"_id", 1}})
+
+	maxRaw, err := mcoll.FindOne(ctx, bson.D{}, maxIDOptions).Raw()
 	if err != nil {
-		return keyRange{}, errors.Wrap(err, "max _id")
+		return keyRange{}, nil, errors.Wrap(err, "max _id")
+	}
+
+	if strings.Contains(maxRaw.Lookup("_id").DebugString(), "NaN") {
+		nanDoc = maxRaw
+
+		maxRaw, err = mcoll.FindOne(ctx, bson.D{}, maxIDOptions.SetSkip(1)).Raw()
+		if err != nil {
+			return keyRange{}, nil, errors.Wrap(err, "max _id (skip NaN)")
+		}
 	}
 
 	ret := keyRange{
@@ -792,32 +840,47 @@ func getIDKeyRange(ctx context.Context, mcoll *mongo.Collection) (keyRange, erro
 		Max: maxRaw.Lookup("_id"),
 	}
 
-	return ret, nil
+	return ret, &nanDoc, nil
 }
 
-// getIDKeyRangeByType returns a slice of keyRange grouped by the BSON type of the _id field.
+// getMultiTypeIDKeyRanges returns a slice of keyRange grouped by the BSON type of the _id field.
 // It performs an aggregation that groups documents by _id type, computing the min and max _id
 // for each group. This allows the Segmenter to handle collections with heterogeneous _id types
 // by processing each type range sequentially.
-func getIDKeyRangeByType(ctx context.Context, mcoll *mongo.Collection) ([]keyRange, error) {
-	cur, err := mcoll.Aggregate(ctx, mongo.Pipeline{
-		bson.D{{"$group", bson.D{
-			{"_id", bson.D{{"type", bson.D{{"$type", "$_id"}}}}},
-			{"minKey", bson.D{{"$min", "$_id"}}},
-			{"maxKey", bson.D{{"$max", "$_id"}}},
-		}}},
-	})
+func getMultiTypeIDKeyRanges(ctx context.Context, mcoll *mongo.Collection) ([]keyRange, error) {
+	cur, err := mcoll.Aggregate(ctx,
+		mongo.Pipeline{
+			// Match only numeric types that are not NaN
+			bson.D{{"$match", bson.D{
+				{"$expr", bson.D{
+					// Only allow if _id is not NaN
+					{"$ne", bson.A{"$_id", bson.D{{"$literal", math.NaN()}}}},
+				}},
+			}}},
+			// Group by type and find min/max
+			bson.D{{"$group", bson.D{
+				{"_id", bson.D{{"type", bson.D{{"$type", "$_id"}}}}},
+				{"minKey", bson.D{{"$min", "$_id"}}},
+				{"maxKey", bson.D{{"$max", "$_id"}}},
+			}}},
+		})
 	if err != nil {
 		return nil, errors.Wrap(err, "query")
 	}
 
-	var segmentRanges []keyRange
-	err = cur.All(ctx, &segmentRanges)
+	var keyRanges []keyRange
+
+	err = cur.All(ctx, &keyRanges)
 	if err != nil {
 		return nil, errors.Wrap(err, "all")
 	}
 
-	return segmentRanges, nil
+	for i := range keyRanges {
+		log.Ctx(ctx).Debugf("Keyrange %d: type: %s, range [%v <=> %v]", i+1,
+			keyRanges[i].Min.Type.String(), keyRanges[i].Min, keyRanges[i].Max)
+	}
+
+	return keyRanges, nil
 }
 
 // CappedSegmenter provides sequential cursor access for capped collections.

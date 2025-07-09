@@ -8,6 +8,7 @@ import testing
 from plm import PLM, Runner
 from pymongo import MongoClient
 from testing import Testing
+from bson.decimal128 import Decimal128
 
 
 def ensure_collection(source: MongoClient, target: MongoClient, db: str, coll: str, **kwargs):
@@ -589,6 +590,7 @@ def test_plm_109_rename_complex(t: Testing, phase: Runner.Phase):
 
     t.compare_all()
 
+
 @pytest.mark.timeout(30)
 def test_plm_110_rename_during_clone_and_repl(t: Testing):
     payload = random.randbytes(1000)
@@ -628,3 +630,39 @@ def test_plm_110_rename_during_clone_and_repl(t: Testing):
             t.source[db][coll].insert_many({"payload": payload} for _ in range(500))
 
     t.compare_all()
+
+
+def test_clone_with_nan_id_document(t: Testing):
+    t.source["db_1"]["coll_1"].insert_one({"_id": float("nan"), "i": 100})
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": random.uniform(1e5, 1e10), "i": i} for i in range(50)]
+    )
+
+    with t.run(phase=Runner.Phase.MANUAL) as r:
+        r.start()
+        r.wait_for_clone_completed()
+
+    sourceDocCount = t.source["db_1"]["coll_1"].count_documents({})
+    targetDocCount = t.target["db_1"]["coll_1"].count_documents({})
+    assert sourceDocCount == targetDocCount
+
+
+def test_clone_with_nan_id_document_multi_id_types(t: Testing):
+    t.source["db_1"]["coll_1"].insert_one({"_id": Decimal128("NaN"), "i": 200})
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": random.uniform(1e5, 1e10), "i": i} for i in range(50)]
+    )
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": Decimal128(str(random.uniform(1e5, 1e10))), "i": i} for i in range(50)]
+    )
+    t.source["db_1"]["coll_1"].insert_many(
+        [{"_id": str(random.uniform(1e5, 1e10)), "i": i} for i in range(50)]
+    )
+
+    with t.run(phase=Runner.Phase.MANUAL) as r:
+        r.start()
+        r.wait_for_clone_completed()
+
+    sourceDocCount = t.source["db_1"]["coll_1"].count_documents({})
+    targetDocCount = t.target["db_1"]["coll_1"].count_documents({})
+    assert sourceDocCount == targetDocCount
