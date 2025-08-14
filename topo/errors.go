@@ -1,26 +1,13 @@
 package topo
 
 import (
+	"context"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"github.com/percona/percona-link-mongodb/errors"
 )
-
-// IsRetryableWrite checks if the error has the "RetryableWriteError" label.
-func IsRetryableWrite(err error) bool {
-	for err != nil {
-		le, ok := err.(mongo.LabeledError) //nolint:errorlint
-		if ok {
-			return le.HasErrorLabel("RetryableWriteError")
-		}
-
-		err = errors.Unwrap(err)
-	}
-
-	return false
-}
 
 // IsIndexNotFound checks if an error is an index not found error.
 func IsIndexNotFound(err error) bool {
@@ -74,9 +61,18 @@ func isMongoCommandError(err error, name string) bool {
 	return false
 }
 
-// IsTransientError checks if the error is a transient error that can be retried.
+// IsTransient checks if the error is a transient error that can be retried.
 // It checks for specific MongoDB error codes that indicate transient issues.
-func IsTransientError(err error) bool {
+func IsTransient(err error) bool {
+	if mongo.IsNetworkError(err) || mongo.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	le, ok := err.(mongo.LabeledError) //nolint:errorlint
+	if ok && le.HasErrorLabel("RetryableWriteError") {
+		return true
+	}
+
 	transientErrorCodes := map[int]struct{}{
 		11602: {}, // InterruptedDueToReplStateChange
 		91:    {}, // ShutdownInProgress
@@ -88,22 +84,23 @@ func IsTransientError(err error) bool {
 	var wEx mongo.WriteException
 	if errors.As(err, &wEx) {
 		for _, we := range wEx.WriteErrors {
-			if _, ok := transientErrorCodes[we.Code]; ok {
-				return true
-			}
+			_, ok := transientErrorCodes[we.Code]
+
+			return ok
 		}
+
 		if wEx.WriteConcernError != nil {
-			if _, ok := transientErrorCodes[wEx.WriteConcernError.Code]; ok {
-				return true
-			}
+			_, ok := transientErrorCodes[wEx.WriteConcernError.Code]
+
+			return ok
 		}
 	}
 
 	var cmdErr mongo.CommandError
 	if errors.As(err, &cmdErr) {
-		if _, ok := transientErrorCodes[int(cmdErr.Code)]; ok {
-			return true
-		}
+		_, ok := transientErrorCodes[int(cmdErr.Code)]
+
+		return ok
 	}
 
 	return false
